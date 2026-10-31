@@ -137,5 +137,39 @@ int main() {
         CHECK(game::Position::fromFen(randomPosition.fen()).hash==randomPosition.hash);
     }
     CHECK(randomPosition.fen()==originalFen && randomPosition.hash==originalHash);
+    // Threefold repetition must be recognized using real game history.
+    // In particular this remains correct after null-move pruning attempts.
+    auto repeated=game::Position::start();
+    std::vector<std::uint64_t> previous{repeated.hash};
+    for(const auto* uci:{"g1f3","g8f6","f3g1","f6g8",
+                         "g1f3","g8f6","f3g1","f6g8"}) {
+        CHECK(repeated.playUci(uci));
+        previous.push_back(repeated.hash);
+    }
+    CHECK(repeated.hash==game::Position::start().hash);
+    engine::Limits repetitionLimits;repetitionLimits.depth=5;
+    e.prepareSearch();
+    auto repeatedSearch=e.search(repeated,repetitionLimits,previous);
+    CHECK(repeatedSearch.info.depth==5);
+    CHECK(repeatedSearch.info.score==0);
+    CHECK(static_cast<bool>(repeatedSearch.best));
+    // Exercise clustered TT lookups and replacement across search positions.
+    e.clearHash();
+    for(const auto* fen:{
+        "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+        "rnbqkbnr/pp1ppppp/8/2p5/2P5/8/PP1PPPPP/RNBQKBNR w KQkq c6 0 2",
+        "4k3/8/8/8/8/8/8/4K2Q w - - 0 1"
+    }) {
+        auto position=game::Position::fromFen(fen);
+        game::MoveList legalChoices;position.legalMoves(legalChoices);
+        e.prepareSearch();
+        engine::Limits stressLimits;stressLimits.depth=4;
+        const auto searched=e.search(position,stressLimits);
+        CHECK(searched.info.depth==4);
+        bool matches=false;
+        for(int i=0;i<legalChoices.size;++i)
+            if(legalChoices[i]==searched.best)matches=true;
+        CHECK(matches);
+    }
     std::cout<<"All game/search tests passed\n";
 }
