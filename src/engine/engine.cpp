@@ -18,8 +18,8 @@ Engine::Engine(std::size_t hashMb){resizeHash(hashMb);}
 void Engine::resizeHash(std::size_t mb) {
     mb=std::clamp<std::size_t>(mb,1,1024);
     // Power-of-two table avoids costly integer division in every probe.
-    const auto requested=std::max<std::size_t>(1,mb*1024*1024/sizeof(TTEntry));
-    tt.assign(std::bit_floor(requested),{});
+    const auto requested=std::max<std::size_t>(TTClusterSize,mb*1024*1024/sizeof(TTEntry));
+    tt.assign(std::bit_floor(requested/TTClusterSize)*TTClusterSize,{});
 }
 unsigned Engine::setSyzygyPath(std::string_view path) {
     clearHash();
@@ -40,8 +40,10 @@ bool Engine::draw(const game::Position& pos) const {
     int seen=0;
     // Only reversible moves can create a repetition of the current position.
     int start=std::max<int>(0,static_cast<int>(history.size())-1-pos.halfmove);
-    for(int i=static_cast<int>(history.size())-2;i>=start;--i)
+    for(int i=static_cast<int>(history.size())-2;i>=start;--i) {
+        if(history[i]==0)break; // Do not cross an artificial null move.
         if(history[i]==pos.hash && ++seen>=2)return true;
+    }
     return false;
 }
 int Engine::evaluate(const game::Position& pos) const {
@@ -292,12 +294,12 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
 }
 int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,bool allowNull) {
     if(expired())return 0;
+    if(depth<=0)return quiescence(pos,alpha,beta,ply);
     ++nodes;
     bool inCheck=pos.inCheck(pos.whiteToMove);
     if(draw(pos) && !(inCheck && !pos.hasLegalMove()))return 0;
     if(ply>=MaxPly-1)return inCheck && !pos.hasLegalMove()?-Mate+ply:evaluate(pos);
     if(auto tb=tablebase.probeWdl(pos)) return *tb;
-    if(depth<=0)return quiescence(pos,alpha,beta,ply);
     if(inCheck)++depth; // check extension
     const int originalAlpha=alpha;
     const bool pvNode=beta-alpha>1;
@@ -305,17 +307,26 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     // frontier, and only after a legal move has already been fully searched.
     const bool futile=depth==1 && !pvNode && !inCheck &&
                       alpha<Mate-256 && evaluate(pos)+180<=alpha;
-    auto& entry=tt[pos.hash&(tt.size()-1)];
+    const auto bucket=(pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize;
+    TTEntry* hit=nullptr;
+    TTEntry* victim=&tt[bucket];
+    auto replaceWeight=[&](const TTEntry& e) {
+        return e.key==0?-100000:(e.age==ttAge?e.depth:e.depth-8);
+    };
+    for(std::size_t j=0;j<TTClusterSize;++j) {
+        auto& candidate=tt[bucket+j];
+        if(candidate.key==pos.hash){hit=&candidate;break;}
+        if(replaceWeight(candidate)<replaceWeight(*victim))victim=&candidate;
+    }
     game::Move hashMove{};
-    // At high 50-move counts the position's halfmove clock matters but is not hashed.
     const bool ttSafe=pos.halfmove<80;
-    if(ttSafe && entry.key==pos.hash) {
-        hashMove=entry.move;
-        if(entry.depth>=depth && ply>0) {
-            int cached=entry.score;
+    if(ttSafe && hit) {
+        hashMove=hit->move;
+        if(hit->depth>=depth && ply>0) {
+            int cached=hit->score;
             if(cached>Mate-512)cached-=ply;
             else if(cached<-Mate+512)cached+=ply;
-            if(entry.bound==0||(entry.bound==1&&cached>=beta)||(entry.bound==2&&cached<=alpha))return cached;
+            if(hit->bound==0||(hit->bound==1&&cached>=beta)||(hit->bound==2&&cached<=alpha))return cached;
         }
     }
     // Null-move pruning: skip only with a non-pawn piece to avoid basic zugzwang.
@@ -326,11 +337,17 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         pos.bitboards[pos.whiteToMove?0:1][game::Rook-1] ||
         pos.bitboards[pos.whiteToMove?0:1][game::Queen-1]) && evaluate(pos)>=beta) {
         auto undo=pos.makeNull();
+        history.push_back(0); // Separate real positions from null-move search.
         history.push_back(pos.hash);
         int value=-negamax(pos,depth-4,-beta,-beta+1,ply+1,false);
-        history.pop_back();pos.unmakeNull(undo);
+        history.pop_back();history.pop_back();pos.unmakeNull(undo);
         if(expired())return 0;
-        if(value>=beta)return beta;
+        if(value>=beta) {
+            if(depth<8)return beta;
+            const int verified=negamax(pos,depth-4,beta-1,beta,ply,false);
+            if(expired())return 0;
+            if(verified>=beta)return beta;
+        }
     }
     game::MoveList moves;pos.pseudoMoves(moves);
     std::array<int,game::MAX_MOVES> scores{};
@@ -364,6 +381,9 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
                 reduction=1;
                 if(depth>=7 && legal>=8)++reduction;
                 if(depth>=11 && legal>=14)++reduction;
+                const int historyScore=moveHistory[mover?0:1][m.from][m.to];
+                if(historyScore>1000 && reduction>0)--reduction;
+                if(historyScore< -2000 && depth>=6 && legal>=7)++reduction;
                 // Preserve the principal variation, and never reduce below 1 ply.
                 if(pvNode && reduction>1)--reduction;
                 reduction=std::min(reduction,depth-2);
@@ -397,25 +417,30 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     if(!legal)return inCheck?-Mate+ply:0;
     if(ply==0)rootBestMove=bestMove;
     // Prefer replacing old entries and shallower entries; exact scores carry the most value.
-    if(ttSafe && (entry.key==pos.hash || entry.age!=ttAge ||
-                  depth>=entry.depth || (best>originalAlpha && best<beta))) {
-        entry.key=pos.hash;entry.move=bestMove;entry.depth=static_cast<std::int16_t>(depth);
-        int stored=best;
-        if(stored>Mate-512)stored+=ply;
-        else if(stored<-Mate+512)stored-=ply;
-        entry.score=static_cast<std::int16_t>(stored);
-        entry.bound=best<=originalAlpha?2:(best>=beta?1:0);
-        entry.age=ttAge;
+    if(ttSafe) {
+        auto& entry=hit?*hit:*victim;
+        if(!hit || depth>=entry.depth || (best>originalAlpha && best<beta)) {
+            entry.key=pos.hash;entry.move=bestMove;entry.depth=static_cast<std::int16_t>(depth);
+            int stored=best;
+            if(stored>Mate-512)stored+=ply;
+            else if(stored<-Mate+512)stored-=ply;
+            entry.score=static_cast<std::int16_t>(stored);
+            entry.bound=best<=originalAlpha?2:(best>=beta?1:0);
+            entry.age=ttAge;
+        }
     }
     return best;
 }
 std::vector<game::Move> Engine::principalVariation(game::Position pos,int length) {
     std::vector<game::Move> pv;
     for(int i=0;i<length;++i) {
-        const auto& e=tt[pos.hash&(tt.size()-1)];
-        if(e.key!=pos.hash||!static_cast<bool>(e.move))break;
+        const auto bucket=(pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize;
+        const TTEntry* entry=nullptr;
+        for(std::size_t j=0;j<TTClusterSize;++j)
+            if(tt[bucket+j].key==pos.hash){entry=&tt[bucket+j];break;}
+        if(!entry||!static_cast<bool>(entry->move))break;
         game::MoveList moves;pos.legalMoves(moves);
-        auto m=e.move;
+        auto m=entry->move;
         bool found=false;
         for(int j=0;j<moves.size;++j)if(moves[j]==m){found=true;break;}
         if(!found)break;
@@ -454,11 +479,14 @@ Result Engine::search(game::Position pos,Limits requested,
             alpha=std::max(-Mate-100,result.info.score-35);
             beta=std::min(Mate+100,result.info.score+35);
         }
-        int score=negamax(pos,depth,alpha,beta,0);
-        if(expired())break;
-        if(score<=alpha || score>=beta) {
-            // Full-window retry: do not publish an unconfirmed aspiration result.
-            score=negamax(pos,depth,-Mate-100,Mate+100,0);
+        int score=0,delta=35;
+        for(;;) {
+            score=negamax(pos,depth,alpha,beta,0);
+            if(expired())break;
+            if(score>alpha && score<beta)break;
+            delta=std::min(delta*2,Mate+100);
+            if(score<=alpha)alpha=std::max(-Mate-100,score-delta);
+            else beta=std::min(Mate+100,score+delta);
         }
         if(expired())break; // Preserve previous fully completed depth.
         auto pv=principalVariation(pos,depth);
