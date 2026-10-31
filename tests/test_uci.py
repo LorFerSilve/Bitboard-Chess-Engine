@@ -14,6 +14,7 @@ for i in range(15):
         check=True,
     )
     assert "option name SyzygyPath" in result.stdout
+    assert "option name Move Overhead" in result.stdout
     assert "uciok" in result.stdout
     assert "readyok" in result.stdout
     assert "bestmove " in result.stdout, result.stdout
@@ -51,3 +52,12 @@ r = subprocess.run([engine], input="setoption name SyzygyPath value /unused/path
                    text=True, capture_output=True, timeout=3, check=True)
 # If built with Syzygy enabled, Fathom may just report zero available files.
 assert "Syzygy" in r.stdout, r.stdout
+
+# Clock management must keep an allocated move below a near-expired clock.
+# A zero-overhead option also remains accepted by the UCI adapter.
+r = subprocess.run(
+    [engine],
+    input="uci\nsetoption name Move Overhead value 0\nposition startpos\ngo wtime 100 btime 100 winc 0 binc 0 movestogo 30\n",
+    text=True, capture_output=True, timeout=5, check=True,
+)
+assert "bestmove " in r.stdout, r.stdout
