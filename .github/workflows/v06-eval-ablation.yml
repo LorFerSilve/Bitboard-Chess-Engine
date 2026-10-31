@@ -1,0 +1,38 @@
+name: v0.6 ablation eval-only versus v0.5
+on:
+  push:
+    branches:
+      - bench/v06-eval-ablation
+jobs:
+  match:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build engine
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+      - name: Build Fastchess
+        run: |
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Paired 200-game match
+        run: |
+          mkdir -p results
+          printf 'Candidate: %s\nBaseline: %s\n' "$(git rev-parse HEAD)" 9189218c76bee69c08a7e29dad12650ada2d1b13 > results/revisions.txt
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --baseline-ref 9189218c76bee69c08a7e29dad12650ada2d1b13 \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 100 --tc 3+0.03 \
+            --concurrency 2 --hash 16 --seed 20261031 \
+            --out results/eval-only-vs-v05
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-only-v05-200games
+          path: results/
+          if-no-files-found: warn
