@@ -250,15 +250,9 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
         if(stand>=beta)return pos.hasLegalMove()?beta:0;
         alpha=std::max(alpha,stand);
     }
-    game::MoveList pseudo;pos.pseudoMoves(pseudo);
     game::MoveList moves;
-    // Do not sort (or score with SEE) quiet moves that qsearch cannot search.
-    // In check all evasions must still be considered.
-    for(int i=0;i<pseudo.size;++i) {
-        auto m=pseudo[i];
-        if(check || m.promotion || m.flag==game::EnPassant || pos.board[m.to])
-            moves.push(m);
-    }
+    // Generate only captures/promotions; checks still require every evasion.
+    pos.pseudoMoves(moves,!check);
     std::array<int,game::MAX_MOVES> scores{};
     for(int i=0;i<moves.size;++i)scores[i]=moveScore(pos,moves[i],{},ply);
     int legal=0;

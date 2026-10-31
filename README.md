@@ -31,7 +31,7 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 
 ### v0.5 changes
 
-- Quiescence sorts only tactical moves unless in check, and delays expensive stalemate verification until needed. Stand-pat beta cutoffs still verify that at least one legal move exists.
+- Quiescence generates and sorts only captures/promotions unless in check, and delays expensive stalemate verification until needed. Stand-pat beta cutoffs still verify that at least one legal move exists.
 - Quiet history updates now reward cutoff moves and penalize previously tried quiet failures; shallow non-PV futility pruning skips selected nonchecking non-pawn quiets only after a searched legal move.
 - A configurable UCI `Move Overhead` option (default 20 ms) reserves time from the clock. Iterative deepening stops starting new iterations once 75% of the hard budget is consumed.
 - All pruning/evaluation changes remain **strength hypotheses**, not proven Elo improvements. Verify with paired matches against v0.4 before calling v0.5 stronger.

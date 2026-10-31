@@ -311,7 +311,7 @@ bool Position::inCheck(bool white) const {
     auto kings=bitboards[white?0:1][King-1];
     return kings==0||attacked(std::countr_zero(kings),!white);
 }
-void Position::pseudoMoves(MoveList& out) const {
+void Position::pseudoMoves(MoveList& out,bool tacticalOnly) const {
     out.size=0;
     const bool w=whiteToMove;
     const int side=w?0:1,dir=w?8:-8,enemy=w?-1:1;
@@ -326,9 +326,11 @@ void Position::pseudoMoves(MoveList& out) const {
         int from=std::countr_zero(pawns);pawns&=pawns-1;
         int to=from+dir;
         if(to>=0&&to<64&&board[to]==0) {
-            add(from,to);
+            // Quiet underpromotions and queen promotions are tactical.
+            if(!tacticalOnly || rank(to)==(w?7:0))add(from,to);
             int two=to+dir;
-            if(rank(from)==(w?1:6)&&board[two]==0)add(from,two,DoublePush);
+            if(!tacticalOnly && rank(from)==(w?1:6) && board[two]==0)
+                add(from,two,DoublePush);
         }
         for(int df:{-1,1}) {
             if(!inside(file(from)+df,rank(from)+(w?1:-1)))continue;
@@ -343,18 +345,20 @@ void Position::pseudoMoves(MoveList& out) const {
             int from=std::countr_zero(bb);bb&=bb-1;
             if(piece==Knight||piece==King) {
                 Bitboard a=(piece==Knight?knightAttacks[from]:kingAttacks[from])&~occupied[side];
+                if(tacticalOnly)a&=occupied[1-side];
                 while(a){int to=std::countr_zero(a);a&=a-1;add(from,to);}
             } else {
                 const Bitboard occ=occupied[0]|occupied[1];
                 Bitboard a=(piece==Bishop?bishopAttacks(from,occ):
                             piece==Rook?rookAttacks(from,occ):
                             rookAttacks(from,occ)|bishopAttacks(from,occ)) & ~occupied[side];
+                if(tacticalOnly)a&=occupied[1-side];
                 while(a){int to=std::countr_zero(a);a&=a-1;add(from,to);}
             }
         }
     }
     const int kingSq=w?4:60;
-    if(board[kingSq]==(w?King:-King)&&!inCheck(w)) {
+    if(!tacticalOnly && board[kingSq]==(w?King:-King)&&!inCheck(w)) {
         if(castling&(w?1:4)) {
             int rookSq=w?7:63;
             if(board[rookSq]==(w?Rook:-Rook)&&board[kingSq+1]==0&&board[kingSq+2]==0&&
