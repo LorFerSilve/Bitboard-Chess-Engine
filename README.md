@@ -40,7 +40,7 @@ These profiles cover the benchmark workload; for serious PGO gains also run sear
 
 ## UCI
 
-Supports `uci`, `isready`, `ucinewgame`, `position startpos moves ...`, `position fen <six fields> moves ...`, `go depth N`, `go movetime N`, clock-based `go wtime ... btime ...`, `go nodes N`, `go infinite`, `go perft N`, `stop`, `setoption name Hash value N`, `quit`.
+Supports `uci`, `isready`, `ucinewgame`, `position startpos moves ...`, `position fen <six fields> moves ...`, `go depth N`, `go movetime N`, clock-based `go wtime ... btime ...`, `go nodes N`, `go infinite`, `go perft N`, `stop`, `setoption name Hash value N`, `setoption name SyzygyPath value PATH`, `quit`.
 
 ```text
 uci

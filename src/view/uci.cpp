@@ -38,6 +38,7 @@ int main() {
                 print("id name Bitboard Chess Engine");
                 print("id author Bitboard-Chess-Engine contributors");
                 print("option name Hash type spin default 32 min 1 max 1024");
+                print("option name SyzygyPath type string default <empty>");
                 print("uciok");
             } else if(command=="isready")print("readyok");
             else if(command=="ucinewgame") {
@@ -65,6 +66,12 @@ int main() {
             } else if(command=="setoption") {
                 stopSearch();
                 if(input.find("name Hash")!=std::string::npos)engine.resizeHash(parameter(args,"value",32));
+                else if(input.find("name SyzygyPath")!=std::string::npos) {
+                    auto value=input.find(" value ");
+                    std::string path=value==std::string::npos?"":input.substr(value+7);
+                    unsigned pieces=engine.setSyzygyPath(path);
+                    print("info string Syzygy maximum pieces: "+std::to_string(pieces));
+                }
             } else if(command=="go") {
                 stopSearch();
                 if(args.size()>=3&&args[1]=="perft") {

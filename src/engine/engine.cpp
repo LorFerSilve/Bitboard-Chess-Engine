@@ -19,6 +19,10 @@ void Engine::resizeHash(std::size_t mb) {
     mb=std::clamp<std::size_t>(mb,1,1024);
     tt.assign(std::max<std::size_t>(1,mb*1024*1024/sizeof(TTEntry)),{});
 }
+unsigned Engine::setSyzygyPath(std::string_view path) {
+    clearHash();
+    return tablebase.setPath(path);
+}
 void Engine::clearHash(){std::fill(tt.begin(),tt.end(),TTEntry{});}
 void Engine::prepareSearch(){stopped.store(false,std::memory_order_relaxed);}
 void Engine::stop(){stopped.store(true,std::memory_order_relaxed);}
@@ -204,6 +208,7 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     bool inCheck=pos.inCheck(pos.whiteToMove);
     if(draw(pos) && !(inCheck && !pos.hasLegalMove()))return 0;
     if(ply>=MaxPly-1)return inCheck && !pos.hasLegalMove()?-Mate+ply:evaluate(pos);
+    if(auto tb=tablebase.probeWdl(pos)) return *tb;
     if(depth<=0)return quiescence(pos,alpha,beta,ply);
     if(inCheck)++depth; // check extension
     const int originalAlpha=alpha;
@@ -316,6 +321,13 @@ Result Engine::search(game::Position pos,Limits requested,
     Result result;
     if(initial.size==0)return result;
     result.best=initial[0];
+    // Root DTZ probe respects the halfmove clock; ordinary search is the fallback.
+    if(auto move=tablebase.probeRoot(pos)) {
+        result.best=move->move;
+        result.info.pv={move->move};
+        result.info.score=move->score;
+        return result;
+    }
     if(initial.size==1){result.info.pv.push_back(result.best);return result;}
     for(int depth=1;depth<=limits.depth;++depth) {
         if(expired())break;

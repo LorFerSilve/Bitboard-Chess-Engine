@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(BitboardChessEngine VERSION 0.2.0 LANGUAGES CXX)
+project(BitboardChessEngine VERSION 0.3.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(CHESS_SYZYGY "Enable Fathom Syzygy endgame probing (downloads source at configure time)" OFF)
 option(CHESS_NATIVE "Use CPU-specific instructions (not portable)" OFF)
 option(CHESS_LTO "Enable link-time optimization for Release builds" ON)
 option(CHESS_PEXT "Use BMI2 PEXT sliding attack tables when supported" ON)
@@ -48,7 +49,21 @@ endif()
 find_package(Threads REQUIRED)
 add_library(chess_game src/game/game.cpp)
 target_include_directories(chess_game PUBLIC include)
-add_library(chess_engine src/engine/engine.cpp)
+add_library(chess_engine src/engine/engine.cpp src/engine/tablebase.cpp)
+if(CHESS_SYZYGY)
+    enable_language(C)
+    include(FetchContent)
+    FetchContent_Declare(fathom
+        GIT_REPOSITORY https://github.com/jdart1/Fathom.git
+        GIT_TAG c9c6fef0dddc05d2e242c183acf5833149ab676d)
+    FetchContent_MakeAvailable(fathom)
+    add_library(chess_fathom STATIC
+        ${fathom_SOURCE_DIR}/src/tbprobe.c
+        ${fathom_SOURCE_DIR}/src/tbchess.c)
+    target_include_directories(chess_fathom PUBLIC ${fathom_SOURCE_DIR}/src)
+    target_link_libraries(chess_engine PRIVATE chess_fathom)
+    target_compile_definitions(chess_engine PRIVATE CHESS_WITH_SYZYGY)
+endif()
 target_include_directories(chess_engine PUBLIC include)
 target_link_libraries(chess_engine PUBLIC chess_game)
 add_executable(bitboard-chess-engine src/view/uci.cpp)
@@ -67,5 +82,8 @@ if(BUILD_TESTING)
         add_test(NAME uci_protocol COMMAND "${Python3_EXECUTABLE}"
                  "${CMAKE_SOURCE_DIR}/tests/test_uci.py" "$<TARGET_FILE:bitboard-chess-engine>")
         set_tests_properties(uci_protocol PROPERTIES TIMEOUT 30)
+        add_test(NAME strength_runner COMMAND "${Python3_EXECUTABLE}"
+                 "${CMAKE_SOURCE_DIR}/tests/test_strength.py" "$<TARGET_FILE:bitboard-chess-engine>")
+        set_tests_properties(strength_runner PROPERTIES TIMEOUT 30)
     endif()
 endif()

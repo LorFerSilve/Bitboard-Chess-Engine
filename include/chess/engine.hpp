@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chess/game.hpp"
+#include "chess/tablebase.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -32,6 +33,8 @@ public:
     explicit Engine(std::size_t hashMb=32);
     void resizeHash(std::size_t mb);
     void clearHash();
+    unsigned setSyzygyPath(std::string_view path);
+    unsigned syzygyPieces() const { return tablebase.maxPieces(); }
     // Must be called by the owner before launching a new asynchronous search.
     // search() itself does NOT reset the flag: stop requests must never be lost.
     void prepareSearch();
@@ -51,6 +54,7 @@ private:
         std::uint8_t age=0;
     };
     std::vector<TTEntry> tt;
+    Tablebase tablebase;
     std::uint8_t ttAge=0;
     game::Move rootBestMove{};
     std::atomic<bool> stopped{false};

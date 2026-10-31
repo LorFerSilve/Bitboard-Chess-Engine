@@ -10,3 +10,5 @@
 /pgo-data/
 *.gcda
 *.gcno
+
+/results/
