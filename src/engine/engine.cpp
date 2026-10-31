@@ -71,6 +71,26 @@ int Engine::evaluate(const game::Position& pos) const {
     }();
     const auto whitePawns=pos.bitboards[0][game::Pawn-1];
     const auto blackPawns=pos.bitboards[1][game::Pawn-1];
+    const auto fileH=fileA<<7;
+    const std::array<game::Bitboard,2> pawnAttacks{
+        ((whitePawns&~fileA)<<7)|((whitePawns&~fileH)<<9),
+        ((blackPawns&~fileA)>>9)|((blackPawns&~fileH)>>7)
+    };
+    // Aggregate piece attacks by type. This makes king pressure and tactical
+    // vulnerability cheap to evaluate without generating legal moves.
+    std::array<std::array<game::Bitboard,6>,2> attackMaps{};
+    static const auto knightTargets=[] {
+        std::array<game::Bitboard,64> result{};
+        constexpr int df[]={1,2,2,1,-1,-2,-2,-1};
+        constexpr int dr[]={2,1,-1,-2,-2,-1,1,2};
+        for(int sq=0;sq<64;++sq)for(int i=0;i<8;++i){
+            const int f=(sq&7)+df[i],r=(sq>>3)+dr[i];
+            if(f>=0&&f<8&&r>=0&&r<8)result[sq]|=1ULL<<(r*8+f);
+        }
+        return result;
+    }();
+    attackMaps[0][game::Pawn-1]=pawnAttacks[0];
+    attackMaps[1][game::Pawn-1]=pawnAttacks[1];
     int mg=0,eg=0,phase=0;
     for(int sq=0;sq<64;++sq) {
         const int piece=pos.board[sq];
@@ -85,12 +105,40 @@ int Engine::evaluate(const game::Position& pos) const {
         int middle=0,end=0;
         const game::Bitboard ownPawns=white?whitePawns:blackPawns;
         const game::Bitboard enemyPawns=white?blackPawns:whitePawns;
+        const auto pieceAttacks=type==game::Pawn?pawnAttacks[color]:
+                                (type==game::King?game::Bitboard{0}:pos.attacksFrom(sq));
+        if(type>=game::Knight&&type<=game::Queen)attackMaps[color][type-1]|=pieceAttacks;
         switch(type) {
             case game::Pawn: {
                 middle=rank*8+center/2;
                 end=rank*12+center/3;
                 if(!(ownPawns&masks.neighbours[file])){middle-=13;end-=10;}
                 if(std::popcount(ownPawns&masks.files[file])>1){middle-=11;end-=15;}
+                // Supported pawn chains are more robust than lone pawns.
+                if(pawnAttacks[color]&(1ULL<<sq)){middle+=8;end+=9;}
+                const int front=sq+(white?8:-8);
+                if(front>=0&&front<64 && (pawnAttacks[1-color]&(1ULL<<front)) &&
+                   !(pawnAttacks[color]&(1ULL<<sq)) &&
+                   !(ownPawns&masks.neighbours[file])) {
+                    middle-=10;end-=7;
+                }
+                // A one-push pawn fork is an immediate tactical opportunity.
+                if(front>=0&&front<64 && pos.board[front]==0) {
+                    const int targetRank=rank+2;
+                    if(targetRank<=7) {
+                        int valuables=0;
+                        for(int df : {-1,1}) {
+                            const int targetFile=file+df;
+                            if(targetFile<0||targetFile>7)continue;
+                            const int target=front+(white?8:-8)+df;
+                            if(target<0||target>=64)continue;
+                            const int enemy=kind(pos.board[target]);
+                            if(pos.board[target] && (pos.board[target]>0)!=white &&
+                               enemy>=game::Knight)++valuables;
+                        }
+                        if(valuables>=2){middle+=22;end+=14;}
+                    }
+                }
                 if(!(enemyPawns&masks.passed[color][sq])) {
                     middle+=rank*rank*2;
                     end+=rank*rank*4;
@@ -106,9 +154,29 @@ int Engine::evaluate(const game::Position& pos) const {
             }
             case game::Knight: {
                 phase+=1;
-                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                const int mobility=std::popcount(pieceAttacks&~pos.occupied[color]);
                 middle=center*5+3*(mobility-4);
                 end=center*3+2*(mobility-4);
+                // Static fork awareness: both colors are evaluated symmetrically,
+                // so an opponent's looming knight fork becomes a defensive penalty.
+                const auto enemyValuables=pos.bitboards[1-color][game::Rook-1] |
+                                          pos.bitboards[1-color][game::Queen-1] |
+                                          pos.bitboards[1-color][game::King-1];
+                const auto otherTargets=pos.bitboards[1-color][game::Knight-1] |
+                                         pos.bitboards[1-color][game::Bishop-1];
+                const auto victims=enemyValuables|otherTargets;
+                if(std::popcount(pieceAttacks&victims)>=2 &&
+                   (pieceAttacks&enemyValuables)){middle+=23;end+=18;}
+                int reachableForks=0;
+                game::Bitboard destinations=pieceAttacks&~pos.occupied[color]&~pawnAttacks[1-color];
+                while(destinations) {
+                    const int target=std::countr_zero(destinations);
+                    destinations&=destinations-1;
+                    const auto threats=knightTargets[target]&victims;
+                    if(std::popcount(threats)>=2 && (threats&enemyValuables))++reachableForks;
+                }
+                middle+=std::min(22,reachableForks*5);
+                end+=std::min(12,reachableForks*3);
                 // Pawns defending a central knight outpost.
                 if(rank>=3 && rank<=5) {
                     const int supportRank=(sq>>3)+(white?-1:1);
@@ -124,7 +192,7 @@ int Engine::evaluate(const game::Position& pos) const {
             }
             case game::Bishop: {
                 phase+=1;
-                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                const int mobility=std::popcount(pieceAttacks&~pos.occupied[color]);
                 middle=center*3+2*(mobility-7);
                 end=center*3+3*(mobility-7);
                 break;
@@ -166,6 +234,26 @@ int Engine::evaluate(const game::Position& pos) const {
         eg+=side*(egValue[type]+end);
     }
     for(int color=0;color<2;++color) {
+        // Count attacked squares immediately surrounding our king, weighting
+        // heavy-piece pressure and multiple attacking piece types. Unlike a
+        // pure pawn-shield term this detects open-file and piece-based attacks.
+        const int kingSq=std::countr_zero(pos.bitboards[color][game::King-1]);
+        const int kingFile=kingSq&7,kingRank=kingSq>>3;
+        game::Bitboard zone=0;
+        for(int df=-1;df<=1;++df)for(int dr=-1;dr<=1;++dr) {
+            const int f=kingFile+df,r=kingRank+dr;
+            if(f>=0&&f<8&&r>=0&&r<8)zone|=1ULL<<(r*8+f);
+        }
+        const auto& enemy=attackMaps[1-color];
+        const int pawnHits=std::popcount(zone&enemy[game::Pawn-1]);
+        const int knightHits=std::popcount(zone&enemy[game::Knight-1]);
+        const int bishopHits=std::popcount(zone&enemy[game::Bishop-1]);
+        const int rookHits=std::popcount(zone&enemy[game::Rook-1]);
+        const int queenHits=std::popcount(zone&enemy[game::Queen-1]);
+        const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
+        const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
+        const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
+        mg+=(color==0?-1:1)*kingPenalty;
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
             const int side=color==0?1:-1;
             mg+=side*28;eg+=side*35;
