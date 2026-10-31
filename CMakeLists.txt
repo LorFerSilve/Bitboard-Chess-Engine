@@ -57,9 +57,10 @@ if(CHESS_SYZYGY)
         GIT_REPOSITORY https://github.com/jdart1/Fathom.git
         GIT_TAG c9c6fef0dddc05d2e242c183acf5833149ab676d)
     FetchContent_MakeAvailable(fathom)
+    # Fathom's tbprobe.c already includes tbchess.c. Compiling it as a
+    # separate translation unit breaks the optional Syzygy build.
     add_library(chess_fathom STATIC
-        ${fathom_SOURCE_DIR}/src/tbprobe.c
-        ${fathom_SOURCE_DIR}/src/tbchess.c)
+        ${fathom_SOURCE_DIR}/src/tbprobe.c)
     target_include_directories(chess_fathom PUBLIC ${fathom_SOURCE_DIR}/src)
     target_link_libraries(chess_fathom PUBLIC Threads::Threads)
     target_link_libraries(chess_engine PRIVATE chess_fathom)
