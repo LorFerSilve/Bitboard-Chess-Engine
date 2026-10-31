@@ -62,6 +62,7 @@ public:
 private:
     void put(int square, std::int8_t piece);
     std::int8_t remove(int square);
+    bool epHashable() const;
     void rehash();
 };
 } // namespace chess::game

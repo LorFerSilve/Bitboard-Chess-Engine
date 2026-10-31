@@ -4,6 +4,8 @@
 #include <iostream>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
+#include <utility>
 #include <string>
 #include <thread>
 #include <vector>

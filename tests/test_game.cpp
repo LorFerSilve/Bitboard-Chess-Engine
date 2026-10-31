@@ -3,7 +3,6 @@
 #include <stdexcept>
 #define CHECK(cond) do { if (!(cond)) throw std::runtime_error("Test failed: " #cond); } while(false)
 #include <iostream>
-#include <stdexcept>
 #include <vector>
 
 int main() {
@@ -15,6 +14,11 @@ int main() {
     CHECK(p.perft(2)==400);
     CHECK(p.perft(3)==8902);
     CHECK(p.perft(4)==197281);
+    CHECK(p.perft(5)==4865609);
+    auto tactical=game::Position::fromFen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
+    CHECK(tactical.perft(4)==43238);
+    auto castleAndPromotion=game::Position::fromFen("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
+    CHECK(castleAndPromotion.perft(3)==9467);
     CHECK(p.fen()==start);
     auto hash=p.hash;
     game::MoveList legal;p.legalMoves(legal);
@@ -25,6 +29,9 @@ int main() {
     CHECK(p.playUci("e2e4"));
     CHECK(p.fen()=="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1");
     CHECK(!p.playUci("e2e4"));
+    // An uncapturable EP field must not change the repetition hash.
+    auto withoutEp=game::Position::fromFen("rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1");
+    CHECK(withoutEp.hash==p.hash);
     // Cross-check incremental board state and Zobrist hashing after typical play.
     auto sample=game::Position::start();
     for (auto uci : {"e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4"}) {

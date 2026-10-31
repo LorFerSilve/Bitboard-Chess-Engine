@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <cstdlib>
+#include <utility>
 
 namespace chess::game {
 namespace {
@@ -14,7 +15,7 @@ constexpr int rank(int s) { return s>>3; }
 constexpr bool inside(int f,int r) { return f>=0&&f<8&&r>=0&&r<8; }
 constexpr Bitboard bit(int sq) { return 1ULL<<sq; }
 constexpr int index(std::int8_t p) { return p>0?0:1; }
-constexpr int type(std::int8_t p) { return std::abs(static_cast<int>(p)); }
+constexpr int type(std::int8_t p) { return p<0?-static_cast<int>(p):static_cast<int>(p); }
 constexpr std::array<std::pair<int,int>,8> kingDirs{{{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}}};
 constexpr std::array<std::pair<int,int>,8> knightDirs{{{1,2},{2,1},{-1,2},{-2,1},{1,-2},{2,-1},{-1,-2},{-2,-1}}};
 constexpr std::array<std::pair<int,int>,4> rookDirs{{{1,0},{-1,0},{0,1},{0,-1}}};
@@ -91,13 +92,22 @@ std::int8_t Position::remove(int square) {
     hash^=zobrist.piece[index(p)][type(p)-1][square];
     return p;
 }
+bool Position::epHashable() const {
+    if(ep<0) return false;
+    int r=rank(ep)+(whiteToMove?-1:1);
+    for(int df:{-1,1}) {
+        int f=file(ep)+df;
+        if(inside(f,r)&&board[r*8+f]==(whiteToMove?Pawn:-Pawn))return true;
+    }
+    return false;
+}
 void Position::rehash() {
     hash=0;
     for(int sq=0;sq<64;++sq)if(board[sq]) {
         auto p=board[sq];hash^=zobrist.piece[index(p)][type(p)-1][sq];
     }
     hash^=zobrist.castle[castling];
-    if(ep>=0)hash^=zobrist.epFile[file(ep)];
+    if(epHashable())hash^=zobrist.epFile[file(ep)];
     if(!whiteToMove)hash^=zobrist.side;
 }
 Position Position::start() { return fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"); }
@@ -253,7 +263,7 @@ void Position::pseudoMoves(MoveList& out) const {
 Undo Position::make(Move m) {
     Undo u{board[m.from],board[m.to],ep,castling,halfmove,fullmove,hash};
     hash^=zobrist.castle[castling];
-    if(ep>=0)hash^=zobrist.epFile[file(ep)];
+    if(epHashable())hash^=zobrist.epFile[file(ep)];
     std::int8_t moved=remove(m.from);
     if(board[m.to])remove(m.to);
     if(m.flag==EnPassant)u.captured=remove(m.to+(whiteToMove?-8:8));
@@ -273,7 +283,7 @@ Undo Position::make(Move m) {
     if(!whiteToMove)++fullmove;
     whiteToMove=!whiteToMove;
     hash^=zobrist.castle[castling];
-    if(ep>=0)hash^=zobrist.epFile[file(ep)];
+    if(epHashable())hash^=zobrist.epFile[file(ep)];
     hash^=zobrist.side;
     return u;
 }
