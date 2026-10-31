@@ -13,6 +13,7 @@ for i in range(15):
         timeout=3,
         check=True,
     )
+    assert "option name SyzygyPath" in result.stdout
     assert "uciok" in result.stdout
     assert "readyok" in result.stdout
     assert "bestmove " in result.stdout, result.stdout
@@ -44,3 +45,9 @@ for fen in [
     assert "bestmove 0000" in r.stdout, r.stdout
 
 print("UCI integration tests passed")
+
+# No tablebase data or external dependency is required for ordinary builds.
+r = subprocess.run([engine], input="setoption name SyzygyPath value /unused/path\nquit\n",
+                   text=True, capture_output=True, timeout=3, check=True)
+# If built with Syzygy enabled, Fathom may just report zero available files.
+assert "Syzygy" in r.stdout, r.stdout

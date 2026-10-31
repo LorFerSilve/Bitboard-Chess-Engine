@@ -56,6 +56,7 @@ public:
     static Position start();
     std::string fen() const;
     Bitboard attackersTo(int square, bool byWhite, Bitboard occupancy) const;
+    Bitboard attacksFrom(int square) const; // Pseudo-attacks, including defended friendly squares.
     bool attacked(int square, bool byWhite) const;
     bool inCheck(bool white) const;
     void pseudoMoves(MoveList& out) const;

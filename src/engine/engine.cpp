@@ -17,7 +17,9 @@ int kingDistanceToCenter(int square) {
 Engine::Engine(std::size_t hashMb){resizeHash(hashMb);}
 void Engine::resizeHash(std::size_t mb) {
     mb=std::clamp<std::size_t>(mb,1,1024);
-    tt.assign(std::max<std::size_t>(1,mb*1024*1024/sizeof(TTEntry)),{});
+    // Power-of-two table avoids costly integer division in every probe.
+    const auto requested=std::max<std::size_t>(1,mb*1024*1024/sizeof(TTEntry));
+    tt.assign(std::bit_floor(requested),{});
 }
 unsigned Engine::setSyzygyPath(std::string_view path) {
     clearHash();
@@ -43,57 +45,121 @@ bool Engine::draw(const game::Position& pos) const {
     return false;
 }
 int Engine::evaluate(const game::Position& pos) const {
-    // Tapered, handcrafted evaluation. Not a neural-network evaluation.
+    // Tapered classical evaluation. Features and weights are deliberately
+    // conservative until calibrated with paired games against the last release.
     constexpr int mgValue[]={0,100,325,335,500,950,0};
     constexpr int egValue[]={0,115,315,335,525,940,0};
+    constexpr game::Bitboard fileA=0x0101010101010101ULL;
+    static const auto masks=[] {
+        struct Masks {
+            std::array<game::Bitboard,8> files{}, neighbours{};
+            std::array<std::array<game::Bitboard,64>,2> passed{};
+        } result;
+        for(int f=0;f<8;++f) {
+            result.files[f]=fileA<<f;
+            result.neighbours[f]=(f>0?fileA<<(f-1):0) |
+                                 (f<7?fileA<<(f+1):0);
+        }
+        for(int sq=0;sq<64;++sq) {
+            const int f=sq&7,r=sq>>3;
+            for(int rr=r+1;rr<8;++rr)
+                result.passed[0][sq]|=(result.files[f]|result.neighbours[f]) & (0xFFULL<<(rr*8));
+            for(int rr=0;rr<r;++rr)
+                result.passed[1][sq]|=(result.files[f]|result.neighbours[f]) & (0xFFULL<<(rr*8));
+        }
+        return result;
+    }();
+    const auto whitePawns=pos.bitboards[0][game::Pawn-1];
+    const auto blackPawns=pos.bitboards[1][game::Pawn-1];
     int mg=0,eg=0,phase=0;
-    const game::Bitboard files[8]={
-        0x0101010101010101ULL,0x0202020202020202ULL,
-        0x0404040404040404ULL,0x0808080808080808ULL,
-        0x1010101010101010ULL,0x2020202020202020ULL,
-        0x4040404040404040ULL,0x8080808080808080ULL};
-    const game::Bitboard whitePawns=pos.bitboards[0][game::Pawn-1];
-    const game::Bitboard blackPawns=pos.bitboards[1][game::Pawn-1];
     for(int sq=0;sq<64;++sq) {
-        int piece=pos.board[sq];
+        const int piece=pos.board[sq];
         if(!piece)continue;
-        bool white=piece>0;
-        int side=white?1:-1;
-        int type=kind(static_cast<std::int8_t>(piece));
-        int rank=white?(sq>>3):(7-(sq>>3));
-        int file=sq&7;
-        int center=14-kingDistanceToCenter(sq);
+        const bool white=piece>0;
+        const int side=white?1:-1;
+        const int color=white?0:1;
+        const int type=kind(static_cast<std::int8_t>(piece));
+        const int rank=white?(sq>>3):(7-(sq>>3));
+        const int file=sq&7;
+        const int center=14-kingDistanceToCenter(sq);
         int middle=0,end=0;
+        const game::Bitboard ownPawns=white?whitePawns:blackPawns;
+        const game::Bitboard enemyPawns=white?blackPawns:whitePawns;
         switch(type) {
             case game::Pawn: {
                 middle=rank*8+center/2;
                 end=rank*12+center/3;
-                game::Bitboard own=white?whitePawns:blackPawns;
-                game::Bitboard enemy=white?blackPawns:whitePawns;
-                game::Bitboard neighbours= (file?files[file-1]:0) | (file<7?files[file+1]:0);
-                if(!(own&neighbours)){middle-=13;end-=10;}
-                if(std::popcount(own&files[file])>1){middle-=11;end-=15;}
-                game::Bitboard front=0;
-                if(white)for(int r=(sq>>3)+1;r<8;++r)front|=0xFFULL<<(r*8);
-                else for(int r=0;r<(sq>>3);++r)front|=0xFFULL<<(r*8);
-                if(!(enemy&front&(neighbours|files[file]))) {
+                if(!(ownPawns&masks.neighbours[file])){middle-=13;end-=10;}
+                if(std::popcount(ownPawns&masks.files[file])>1){middle-=11;end-=15;}
+                if(!(enemyPawns&masks.passed[color][sq])) {
                     middle+=rank*rank*2;
                     end+=rank*rank*4;
                 }
+                // Connected pawns hold space and are harder to attack.
+                const int backward=sq+(white?-8:8);
+                if(backward>=0 && backward<64 &&
+                   (ownPawns & masks.neighbours[file] &
+                    (0xFFULL<<((backward>>3)*8)))) {
+                    middle+=4;end+=5;
+                }
                 break;
             }
-            case game::Knight: middle=center*5;end=center*3;phase+=1;break;
-            case game::Bishop: middle=center*3;end=center*3;phase+=1;break;
+            case game::Knight: {
+                phase+=1;
+                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                middle=center*5+3*(mobility-4);
+                end=center*3+2*(mobility-4);
+                // Pawns defending a central knight outpost.
+                if(rank>=3 && rank<=5) {
+                    const int supportRank=(sq>>3)+(white?-1:1);
+                    if(supportRank>=0 && supportRank<8) {
+                        game::Bitboard defenders=ownPawns&masks.neighbours[file]&
+                                                (0xFFULL<<(supportRank*8));
+                        if(defenders && !(enemyPawns&masks.passed[color][sq])) {
+                            middle+=16;end+=10;
+                        }
+                    }
+                }
+                break;
+            }
+            case game::Bishop: {
+                phase+=1;
+                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                middle=center*3+2*(mobility-7);
+                end=center*3+3*(mobility-7);
+                break;
+            }
             case game::Rook: {
                 phase+=2;
-                game::Bitboard own=white?whitePawns:blackPawns;
-                game::Bitboard enemy=white?blackPawns:whitePawns;
-                if(!(own&files[file])){middle+=enemy&files[file]?7:15;end+=12;}
+                if(!(ownPawns&masks.files[file])) {
+                    middle+=(enemyPawns&masks.files[file])?7:15;
+                    end+=12;
+                }
                 if(rank==6){middle+=15;end+=18;}
                 break;
             }
-            case game::Queen: middle=center;end=center*2;phase+=4;break;
-            case game::King: middle=-center*4;end=center*5;break;
+            case game::Queen:middle=center;end=center*2;phase+=4;break;
+            case game::King: {
+                middle=-center*4;
+                end=center*5;
+                // King pawn shield: penalize open files near the king while
+                // major pieces remain. Fade this term out in the endgame.
+                int protection=0;
+                const int kingRank=sq>>3;
+                for(int df=-1;df<=1;++df) {
+                    const int f=file+df;
+                    if(f<0||f>7)continue;
+                    bool shield=false;
+                    for(int step=1;step<=2;++step) {
+                        const int r=kingRank+(white?step:-step);
+                        if(r<0||r>7)break;
+                        if(ownPawns&(1ULL<<(r*8+f))) {shield=true;break;}
+                    }
+                    if(shield)++protection;
+                }
+                middle+=(protection-3)*12;
+                break;
+            }
             default:break;
         }
         mg+=side*(mgValue[type]+middle);
@@ -101,47 +167,58 @@ int Engine::evaluate(const game::Position& pos) const {
     }
     for(int color=0;color<2;++color) {
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
-            int side=color==0?1:-1;
+            const int side=color==0?1:-1;
             mg+=side*28;eg+=side*35;
         }
     }
     phase=std::min(24,phase);
-    int score=(mg*phase+eg*(24-phase))/24;
+    const int score=(mg*phase+eg*(24-phase))/24;
     return pos.whiteToMove?score:-score;
 }
-int Engine::see(const game::Position& pos,game::Move m) const {
-    // Static exchange evaluation on one destination square. It tracks occupancy
-    // and x-ray attackers without mutating the actual search position.
-    const int captured=m.flag==game::EnPassant?game::Pawn:kind(pos.board[m.to]);
-    int gains[32]{};
-    gains[0]=values[captured]+(m.promotion?values[m.promotion]-values[game::Pawn]:0);
-    game::Bitboard occ=pos.occupied[0]|pos.occupied[1];
-    occ&=~(1ULL<<m.from);
-    if(m.flag==game::EnPassant)occ&=~(1ULL<<(m.to+(pos.whiteToMove?-8:8)));
-    occ|=1ULL<<m.to;
-    int victim=m.promotion?values[m.promotion]:values[kind(pos.board[m.from])];
-    bool white=!pos.whiteToMove;
-    int depth=0;
-    while(depth<30) {
-        auto attackers=pos.attackersTo(m.to,white,occ);
-        int from=-1,attackerType=0;
-        for(int type=game::Pawn;type<=game::King;++type) {
-            auto pieces=attackers&pos.bitboards[white?0:1][type-1];
-            if(pieces){from=std::countr_zero(pieces);attackerType=type;break;}
+namespace {
+// Least-valuable LEGAL recaptures. Unlike an occupancy-only swap-list SEE,
+// this does not count pinned pieces or a king walking onto an attacked square.
+// This is called only when ordering potentially losing captures, not for every
+// candidate in the search tree.
+int recaptureValue(game::Position& pos,int target,int victim,int ply) {
+    if(ply>=24)return 0;
+    const int color=pos.whiteToMove?0:1;
+    const auto occ=pos.occupied[0]|pos.occupied[1];
+    const auto available=pos.attackersTo(target,pos.whiteToMove,occ);
+    for(int type=game::Pawn;type<=game::King;++type) {
+        auto candidates=available&pos.bitboards[color][type-1];
+        while(candidates) {
+            const int from=std::countr_zero(candidates);
+            candidates&=candidates-1;
+            const bool promotes=type==game::Pawn && ((target>>3)==0 || (target>>3)==7);
+            game::Move move{static_cast<std::uint8_t>(from),
+                            static_cast<std::uint8_t>(target),
+                            static_cast<std::uint8_t>(promotes?game::Queen:0),game::Normal};
+            const bool mover=pos.whiteToMove;
+            auto undo=pos.make(move);
+            const bool legal=!pos.inCheck(mover);
+            if(legal) {
+                const int promotionBonus=promotes?values[game::Queen]-values[game::Pawn]:0;
+                const int newVictim=values[promotes?game::Queen:type];
+                const int gain=victim+promotionBonus-recaptureValue(pos,target,newVictim,ply+1);
+                pos.unmake(move,undo);
+                return std::max(0,gain); // Either capture or decline the exchange.
+            }
+            pos.unmake(move,undo);
         }
-        if(from<0)break;
-        const int previous=gains[depth];
-        gains[++depth]=victim-previous;
-        victim=values[attackerType];
-        occ&=~(1ULL<<from);
-        white=!white;
-        if(attackerType==game::King)break;
     }
-    while(depth>0){
-        gains[depth-1]=-std::max(-gains[depth-1],gains[depth]);
-        --depth;
-    }
-    return gains[0];
+    return 0;
+}
+}
+int Engine::see(const game::Position& pos,game::Move move) const {
+    const int captured=move.flag==game::EnPassant?game::Pawn:kind(pos.board[move.to]);
+    const int promotionBonus=move.promotion?values[move.promotion]-values[game::Pawn]:0;
+    game::Position copy=pos;
+    const bool mover=copy.whiteToMove;
+    auto undo=copy.make(move);
+    if(copy.inCheck(mover))return -30000;
+    const int victim=values[move.promotion?move.promotion:kind(undo.moved)];
+    return values[captured]+promotionBonus-recaptureValue(copy,move.to,victim,0);
 }
 int Engine::moveScore(const game::Position& pos, game::Move m, game::Move hashMove,int ply) const {
     if(m==hashMove && static_cast<bool>(hashMove))return 1000000;
@@ -186,11 +263,17 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
         auto m=moves[i];
         const int captured=m.flag==game::EnPassant?game::Pawn:kind(pos.board[m.to]);
         if(!check && !captured && !m.promotion)continue;
-        // Delta pruning of clearly futile captures; never prune promotions/check evasions.
-        if(!check && !m.promotion && stand+values[captured]+250<alpha)continue;
         bool mover=pos.whiteToMove;
         auto undo=pos.make(m);
         if(pos.inCheck(mover)){pos.unmake(m,undo);continue;}
+        // Checking captures can be tactical even when their immediate material
+        // value is small; never apply delta pruning to those moves.
+        const bool givesCheck=pos.inCheck(pos.whiteToMove);
+        if(!check && !givesCheck && !m.promotion &&
+           stand+values[captured]+250<alpha) {
+            pos.unmake(m,undo);
+            continue;
+        }
         ++legal;
         history.push_back(pos.hash);
         int score=-quiescence(pos,-beta,-alpha,ply+1);
@@ -213,7 +296,7 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     if(inCheck)++depth; // check extension
     const int originalAlpha=alpha;
     const bool pvNode=beta-alpha>1;
-    auto& entry=tt[pos.hash%tt.size()];
+    auto& entry=tt[pos.hash&(tt.size()-1)];
     game::Move hashMove{};
     // At high 50-move counts the position's halfmove clock matters but is not hashed.
     const bool ttSafe=pos.halfmove<80;
@@ -260,7 +343,15 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         int scoreValue;
         if(legal==1) scoreValue=-negamax(pos,depth-1,-beta,-alpha,ply+1);
         else {
-            int reduction=(depth>=3 && legal>=4 && quiet && !inCheck && !pos.inCheck(pos.whiteToMove))?1:0;
+            int reduction=0;
+            if(depth>=3 && legal>=4 && quiet && !inCheck && !pos.inCheck(pos.whiteToMove)) {
+                reduction=1;
+                if(depth>=7 && legal>=8)++reduction;
+                if(depth>=11 && legal>=14)++reduction;
+                // Preserve the principal variation, and never reduce below 1 ply.
+                if(pvNode && reduction>1)--reduction;
+                reduction=std::min(reduction,depth-2);
+            }
             scoreValue=-negamax(pos,depth-1-reduction,-alpha-1,-alpha,ply+1);
             if(scoreValue>alpha && reduction)scoreValue=-negamax(pos,depth-1,-alpha-1,-alpha,ply+1);
             if(scoreValue>alpha && scoreValue<beta)scoreValue=-negamax(pos,depth-1,-beta,-alpha,ply+1);
@@ -296,7 +387,7 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
 std::vector<game::Move> Engine::principalVariation(game::Position pos,int length) {
     std::vector<game::Move> pv;
     for(int i=0;i<length;++i) {
-        const auto& e=tt[pos.hash%tt.size()];
+        const auto& e=tt[pos.hash&(tt.size()-1)];
         if(e.key!=pos.hash||!static_cast<bool>(e.move))break;
         game::MoveList moves;pos.legalMoves(moves);
         auto m=e.move;

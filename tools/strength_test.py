@@ -82,7 +82,7 @@ def parse_args(argv=None):
     baseline.add_argument("--baseline", type=Path, help="Previously built UCI executable")
     baseline.add_argument("--baseline-ref", help="Git commit/tag to build in an isolated worktree")
     p.add_argument("--fastchess", default="fastchess", help="Fastchess executable in PATH or absolute path")
-    p.add_argument("--book", type=Path, default=ROOT / "benchmarks/openings/smoke.epd")
+    p.add_argument("--book", type=Path, default=ROOT / "benchmarks/openings/extended.epd")
     p.add_argument("--mode", choices=("fixed", "sprt"), default="sprt")
     p.add_argument("--rounds", type=int, default=None, help="Pairs, i.e. 2 games per round")
     p.add_argument("--tc", default="10+0.1", help="Seconds+increment, same for both engines")

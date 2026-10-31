@@ -15,6 +15,12 @@ int main() {
     CHECK(p.perft(3)==8902);
     CHECK(p.perft(4)==197281);
     CHECK(p.perft(5)==4865609);
+    // Attack masks include defended friendly squares and all ray squares
+    // through the first blocker, for use by the classical evaluation.
+    CHECK((p.attacksFrom(1) & (1ULL<<16)) != 0); // b1 knight attacks a3
+    CHECK((p.attacksFrom(0) & (1ULL<<8)) != 0);  // a1 rook defends a2
+    CHECK((p.attacksFrom(12) & (1ULL<<19)) != 0); // e2 pawn attacks d3
+    CHECK(p.attacksFrom(28)==0);                  // empty e4
     auto tactical=game::Position::fromFen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
     CHECK(tactical.perft(4)==43238);
     CHECK(tactical.perft(5)==674624);

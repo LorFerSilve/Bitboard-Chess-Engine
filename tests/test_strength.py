@@ -49,5 +49,16 @@ class StrengthTests(unittest.TestCase):
             self.assertNotIn("error:", proc.stdout)
             self.assertIn("bestmove ", proc.stdout)
 
+    def test_extended_openings_all_unique_and_playable(self):
+        fens = (st.ROOT / "benchmarks/openings/extended.epd").read_text().splitlines()
+        self.assertGreaterEqual(len(fens), 80)
+        self.assertEqual(len(set(fens)), len(fens))
+        for fen in fens:
+            proc = subprocess.run([str(self.exe)],
+                                  input=f"position fen {fen} 0 1\nd\nquit\n",
+                                  capture_output=True, text=True, timeout=5, check=True)
+            self.assertNotIn("error:", proc.stdout, fen)
+            self.assertIn(fen, proc.stdout, fen)
+
 if __name__ == "__main__":
     unittest.main()

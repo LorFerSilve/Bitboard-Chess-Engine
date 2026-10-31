@@ -284,6 +284,26 @@ Bitboard Position::attackersTo(int sq,bool white,Bitboard occ) const {
     result|=bishopAttacks(sq,occ)&(bitboards[side][Bishop-1]|bitboards[side][Queen-1]);
     return result&occ;
 }
+Bitboard Position::attacksFrom(int square) const {
+    if(square<0 || square>=64 || board[square]==0) return 0;
+    const int piece=type(board[square]);
+    const int f=file(square),r=rank(square);
+    if(piece==Pawn) {
+        Bitboard result=0;
+        const int nr=r+(board[square]>0?1:-1);
+        if(nr>=0 && nr<8) {
+            if(f>0) result|=bit(nr*8+f-1);
+            if(f<7) result|=bit(nr*8+f+1);
+        }
+        return result;
+    }
+    if(piece==Knight)return knightAttacks[square];
+    if(piece==King)return kingAttacks[square];
+    const Bitboard occ=occupied[0]|occupied[1];
+    if(piece==Bishop)return bishopAttacks(square,occ);
+    if(piece==Rook)return rookAttacks(square,occ);
+    return bishopAttacks(square,occ)|rookAttacks(square,occ);
+}
 bool Position::attacked(int sq,bool white) const {
     return attackersTo(sq,white,occupied[0]|occupied[1])!=0;
 }
