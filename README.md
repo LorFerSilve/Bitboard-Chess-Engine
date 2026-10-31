@@ -1,8 +1,8 @@
 # Bitboard Chess Engine
 
-A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.5** improves search efficiency, quiet-move ordering, conservative frontier pruning, and clock safety. NNUE and Lazy SMP are deliberately deferred.
+A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.6 development candidate** builds on v0.5 with a clustered transposition table, safer null-move verification, adaptive aspiration windows, and tactical/positional evaluation improvements. NNUE and Lazy SMP remain deferred.
 
-This is an **experimental engine**. The improvements below are implementation and correctness changes; **no Elo improvement has yet been established**. The intended process is to run statistically meaningful paired matches using the supplied strength-testing runner before calling any search change a strength improvement.
+This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The strength of the v0.6 candidate must be separately established by head-to-head testing; code changes alone do not demonstrate an Elo improvement.
 
 ## Build and test
 
@@ -28,6 +28,18 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 - **Game** (`include/chess/game.hpp`, `src/game/`): 12 bitboards, square lookup, FEN, move generation, reversible make/unmake, incremental Zobrist hashing, and Perft. `attacksFrom()` exposes pseudo-attacks to evaluation and future interfaces.
 - **Engine** (`include/chess/engine.hpp`, `src/engine/`): single-core iterative deepening, PVS/alpha-beta, aspiration windows, quiescence, null-move pruning, LMR, legal-recature-aware static exchange evaluation for ordering, TT, history/killer ordering, tapered classical evaluation, and optional Syzygy probing.
 - **View** (`src/view/uci.cpp`): asynchronous UCI adapter; a future GUI can use Game and Engine directly.
+
+### v0.6 candidate changes
+
+- Four-entry clustered transposition table to limit destructive collisions, preserving exact-depth and age-aware replacement.
+- Incremental aspiration-window widening instead of immediate full-window retries; history-aware late-move reductions.
+- Null-move verification at higher depths and repetition-history separation across artificial null moves.
+- Fixed duplicate node counting when negamax transitions into quiescence.
+- Cheap recapture-availability screening before expensive legal SEE for unfavorable-looking captures.
+- Tapered evaluation now scores king-zone attacking pressure, pawn-chain support, selected weak pawns, and simple current/one-ply pawn and knight fork threats for both sides. These are *heuristic threats*, not full tactical proof of a forced fork.
+- Threefold-repetition regression test and search tests exercising clustered TT use.
+
+The v0.6 development branch is benchmarked against the v0.5 merge commit `9189218c76bee69c08a7e29dad12650ada2d1b13` using `3+0.03` and paired EPD openings. Retain only statistically justified strength improvements.
 
 ### v0.5 changes
 
@@ -92,7 +104,7 @@ ctest --test-dir build-native -C Release --output-on-failure
 
 - No NNUE, multithreaded search, or graphical interface. Those are independent future phases.
 - Fathom requires real tablebases to prove exact endgame behavior and remains an optional build.
-- Large-scale engine-vs-engine Elo/SPRT tests have not been run on this release. Search and evaluation weights have not been tuned through statistical tests.
+- The v0.5 vs v0.4 200-game comparison is recorded in the repository, but cross-time-control validation and systematic per-heuristic tuning are still needed. The v0.6 candidate has no confirmed Elo gain until its own benchmark finishes.
 - Move generation still relies on pseudo-legal moves filtered by make/unmake; specialized check/pin/evasion generation could reduce work. Quiescence still checks stalemate by testing legal moves.
 - SEE uses legal least-valued recaptures, which is more accurate on pins but can be more expensive; extensive tactical performance regression and tuning remain important.
 - Time management is currently basic. Draw claims are simplified for search rather than modeled as player choices at GUI level.
