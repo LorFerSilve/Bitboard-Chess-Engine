@@ -83,6 +83,7 @@ int main() {
                     const int moves=std::max(1,parameter(args,"movestogo",30));
                     if(clock>0)limits.timeMs=std::max(1,std::min(clock/5,clock/moves+inc/2));
                 }
+                engine.prepareSearch(); // Reset before launching, never inside the worker.
                 worker=std::thread([&,p=position,h=gameHistory,limits] {
                     auto result=engine.search(p,limits,h,[](const engine::SearchInfo& info) {
                         std::ostringstream text;

@@ -27,6 +27,12 @@ struct MoveList {
     Move operator[](int i) const { return data[i]; }
 };
 
+struct NullUndo {
+    std::int8_t ep=-1;
+    std::uint16_t halfmove=0;
+    std::uint64_t hash=0;
+};
+
 struct Undo {
     std::int8_t moved=0, captured=0;
     std::int8_t ep=-1;
@@ -49,13 +55,17 @@ public:
     static Position fromFen(std::string_view fen);
     static Position start();
     std::string fen() const;
+    Bitboard attackersTo(int square, bool byWhite, Bitboard occupancy) const;
     bool attacked(int square, bool byWhite) const;
     bool inCheck(bool white) const;
     void pseudoMoves(MoveList& out) const;
     void legalMoves(MoveList& out);
+    bool hasLegalMove();
     bool playUci(std::string_view move);
     Undo make(Move move);
     void unmake(Move move, Undo undo);
+    NullUndo makeNull();
+    void unmakeNull(NullUndo undo);
     std::uint64_t perft(int depth);
     bool insufficientMaterial() const;
 

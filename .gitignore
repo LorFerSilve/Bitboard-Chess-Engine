@@ -5,3 +5,8 @@
 *.exe
 *.obj
 *.o
+
+/build-*/
+/pgo-data/
+*.gcda
+*.gcno

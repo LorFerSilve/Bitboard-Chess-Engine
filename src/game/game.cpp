@@ -7,6 +7,10 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <utility>
+#if defined(__BMI2__) && defined(CHESS_ENABLE_PEXT)
+#include <immintrin.h>
+#include <vector>
+#endif
 
 namespace chess::game {
 namespace {
@@ -31,6 +35,77 @@ std::array<Bitboard,64> attacks(const std::array<std::pair<int,int>,8>& dirs) {
 }
 const auto knightAttacks=attacks(knightDirs);
 const auto kingAttacks=attacks(kingDirs);
+
+// Precomputed directional rays. The nearest blocker is extracted with bit scans,
+// so sliding attacks do not need per-square loops or CPU-specific intrinsics.
+const auto sliderRays=[] {
+    std::array<std::array<Bitboard,8>,64> rays{};
+    for(int sq=0;sq<64;++sq)
+        for(int d=0;d<8;++d) {
+            auto [df,dr]=kingDirs[d];
+            for(int f=file(sq)+df,r=rank(sq)+dr;inside(f,r);f+=df,r+=dr)
+                rays[sq][d]|=bit(r*8+f);
+        }
+    return rays;
+}();
+Bitboard sliderAttacks(int sq, Bitboard occ, int begin, int end) {
+    Bitboard result=0;
+    for(int d=begin;d<end;++d) {
+        Bitboard ray=sliderRays[sq][d];
+        Bitboard blockers=ray&occ;
+        if(blockers) {
+            // E, N, NE, NW advance toward higher bit indices.
+            bool ascending=(d==0||d==2||d==4||d==6);
+            int blocker=ascending?std::countr_zero(blockers):63-std::countl_zero(blockers);
+            ray&=~sliderRays[blocker][d];
+        }
+        result|=ray;
+    }
+    return result;
+}
+#if defined(__BMI2__) && defined(CHESS_ENABLE_PEXT)
+struct SlidingLookup {
+    Bitboard mask=0;
+    std::vector<Bitboard> entries;
+};
+std::array<SlidingLookup,64> makeSlidingLookup(int begin,int end) {
+    std::array<SlidingLookup,64> result{};
+    for(int sq=0;sq<64;++sq) {
+        auto& lookup=result[sq];
+        for(int d=begin;d<end;++d) {
+            auto [dx,dy]=kingDirs[d];
+            for(int f=file(sq)+dx,r=rank(sq)+dy;inside(f+dx,r+dy);f+=dx,r+=dy)
+                lookup.mask|=bit(r*8+f);
+        }
+        const int size=1<<std::popcount(lookup.mask);
+        lookup.entries.resize(size);
+        for(int index=0;index<size;++index) {
+            Bitboard mask=lookup.mask,blockers=0;
+            for(int b=0;mask;++b) {
+                int offset=std::countr_zero(mask);
+                mask&=mask-1;
+                if(index&(1<<b))blockers|=bit(offset);
+            }
+            lookup.entries[index]=sliderAttacks(sq,blockers,begin,end);
+        }
+    }
+    return result;
+}
+// BMI2 PEXT computes the occupancy index in one instruction.
+const auto rookLookup=makeSlidingLookup(0,4);
+const auto bishopLookup=makeSlidingLookup(4,8);
+Bitboard rookAttacks(int sq,Bitboard occ) {
+    const auto& table=rookLookup[sq];
+    return table.entries[_pext_u64(occ,table.mask)];
+}
+Bitboard bishopAttacks(int sq,Bitboard occ) {
+    const auto& table=bishopLookup[sq];
+    return table.entries[_pext_u64(occ,table.mask)];
+}
+#else
+Bitboard rookAttacks(int sq,Bitboard occ){return sliderAttacks(sq,occ,0,4);}
+Bitboard bishopAttacks(int sq,Bitboard occ){return sliderAttacks(sq,occ,4,8);}
+#endif
 
 std::uint64_t splitmix(std::uint64_t& state) {
     std::uint64_t z=(state+=0x9e3779b97f4a7c15ULL);
@@ -94,10 +169,19 @@ std::int8_t Position::remove(int square) {
 }
 bool Position::epHashable() const {
     if(ep<0) return false;
-    int r=rank(ep)+(whiteToMove?-1:1);
+    const int captured=ep+(whiteToMove?-8:8);
+    if(board[captured]!=(whiteToMove?-Pawn:Pawn))return false;
+    const int r=rank(ep)+(whiteToMove?-1:1);
     for(int df:{-1,1}) {
         int f=file(ep)+df;
-        if(inside(f,r)&&board[r*8+f]==(whiteToMove?Pawn:-Pawn))return true;
+        if(!inside(f,r))continue;
+        int from=r*8+f;
+        if(board[from]!=(whiteToMove?Pawn:-Pawn))continue;
+        Position copy=*this;
+        auto pawn=copy.remove(from);
+        copy.remove(captured);
+        copy.put(ep,pawn);
+        if(!copy.inCheck(whiteToMove))return true;
     }
     return false;
 }
@@ -148,6 +232,19 @@ Position Position::fromFen(std::string_view fenText) {
             throw std::invalid_argument("Invalid en passant square");
         p.ep=static_cast<std::int8_t>(e);
     }
+    // Reject positions that could not arise from a legal previous move.
+    if((p.castling&1) && (p.board[4]!=King || p.board[7]!=Rook))
+        throw std::invalid_argument("Invalid white king-side castling rights");
+    if((p.castling&2) && (p.board[4]!=King || p.board[0]!=Rook))
+        throw std::invalid_argument("Invalid white queen-side castling rights");
+    if((p.castling&4) && (p.board[60]!=-King || p.board[63]!=-Rook))
+        throw std::invalid_argument("Invalid black king-side castling rights");
+    if((p.castling&8) && (p.board[60]!=-King || p.board[56]!=-Rook))
+        throw std::invalid_argument("Invalid black queen-side castling rights");
+    if(p.ep>=0 && p.board[p.ep+(p.whiteToMove?-8:8)]!=(p.whiteToMove?-Pawn:Pawn))
+        throw std::invalid_argument("Invalid en-passant pawn");
+    if(p.inCheck(!p.whiteToMove))
+        throw std::invalid_argument("Side not to move is in check");
     p.halfmove=static_cast<std::uint16_t>(half);
     p.fullmove=static_cast<std::uint16_t>(full);
     p.rehash();
@@ -174,26 +271,21 @@ std::string Position::fen() const {
     out+=' '+std::to_string(halfmove)+' '+std::to_string(fullmove);
     return out;
 }
-bool Position::attacked(int sq,bool white) const {
-    auto own=white?0:1;
-    // Pawn attacks are reversed from the target square.
-    int pawnRank=rank(sq)+(white?-1:1);
+Bitboard Position::attackersTo(int sq,bool white,Bitboard occ) const {
+    const int side=white?0:1;
+    Bitboard result=knightAttacks[sq]&bitboards[side][Knight-1];
+    result|=kingAttacks[sq]&bitboards[side][King-1];
+    const int pawnRank=rank(sq)+(white?-1:1);
     if(pawnRank>=0&&pawnRank<8)for(int df:{-1,1}) {
         int f=file(sq)+df;
-        if(inside(f,pawnRank)&&board[pawnRank*8+f]==(white?Pawn:-Pawn))return true;
+        if(inside(f,pawnRank))result|=bit(pawnRank*8+f)&bitboards[side][Pawn-1];
     }
-    if(knightAttacks[sq]&bitboards[own][Knight-1])return true;
-    if(kingAttacks[sq]&bitboards[own][King-1])return true;
-    auto scan=[&](const auto& dirs, int required) {
-        for(auto [df,dr]:dirs)for(int f=file(sq)+df,r=rank(sq)+dr;inside(f,r);f+=df,r+=dr) {
-            auto piece=board[r*8+f];
-            if(!piece)continue;
-            if((piece>0)==white&&(type(piece)==required||type(piece)==Queen))return true;
-            break;
-        }
-        return false;
-    };
-    return scan(rookDirs,Rook)||scan(bishopDirs,Bishop);
+    result|=rookAttacks(sq,occ)&(bitboards[side][Rook-1]|bitboards[side][Queen-1]);
+    result|=bishopAttacks(sq,occ)&(bitboards[side][Bishop-1]|bitboards[side][Queen-1]);
+    return result&occ;
+}
+bool Position::attacked(int sq,bool white) const {
+    return attackersTo(sq,white,occupied[0]|occupied[1])!=0;
 }
 bool Position::inCheck(bool white) const {
     auto kings=bitboards[white?0:1][King-1];
@@ -233,16 +325,11 @@ void Position::pseudoMoves(MoveList& out) const {
                 Bitboard a=(piece==Knight?knightAttacks[from]:kingAttacks[from])&~occupied[side];
                 while(a){int to=std::countr_zero(a);a&=a-1;add(from,to);}
             } else {
-                auto scan=[&](const auto& dirs) {
-                    for(auto [df,dr]:dirs)for(int f=file(from)+df,r=rank(from)+dr;inside(f,r);f+=df,r+=dr) {
-                        int to=r*8+f;
-                        if(board[to]&&((board[to]>0)==w))break;
-                        add(from,to);
-                        if(board[to])break;
-                    }
-                };
-                if(piece==Bishop||piece==Queen)scan(bishopDirs);
-                if(piece==Rook||piece==Queen)scan(rookDirs);
+                const Bitboard occ=occupied[0]|occupied[1];
+                Bitboard a=(piece==Bishop?bishopAttacks(from,occ):
+                            piece==Rook?rookAttacks(from,occ):
+                            rookAttacks(from,occ)|bishopAttacks(from,occ)) & ~occupied[side];
+                while(a){int to=std::countr_zero(a);a&=a-1;add(from,to);}
             }
         }
     }
@@ -308,6 +395,30 @@ void Position::legalMoves(MoveList& out) {
         unmake(m,u);
         if(ok)out.push(m);
     }
+}
+bool Position::hasLegalMove() {
+    MoveList pseudo;pseudoMoves(pseudo);
+    const bool mover=whiteToMove;
+    for(int i=0;i<pseudo.size;++i) {
+        auto m=pseudo[i];auto u=make(m);
+        bool legal=!inCheck(mover);
+        unmake(m,u);
+        if(legal)return true;
+    }
+    return false;
+}
+NullUndo Position::makeNull() {
+    NullUndo u{ep,halfmove,hash};
+    if(epHashable())hash^=zobrist.epFile[file(ep)];
+    ep=-1;
+    ++halfmove;
+    whiteToMove=!whiteToMove;
+    hash^=zobrist.side;
+    return u;
+}
+void Position::unmakeNull(NullUndo u) {
+    whiteToMove=!whiteToMove;
+    ep=u.ep;halfmove=u.halfmove;hash=u.hash;
 }
 bool Position::playUci(std::string_view str) {
     MoveList legal;legalMoves(legal);

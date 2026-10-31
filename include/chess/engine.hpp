@@ -32,6 +32,9 @@ public:
     explicit Engine(std::size_t hashMb=32);
     void resizeHash(std::size_t mb);
     void clearHash();
+    // Must be called by the owner before launching a new asynchronous search.
+    // search() itself does NOT reset the flag: stop requests must never be lost.
+    void prepareSearch();
     void stop();
     Result search(game::Position position, Limits limits={},
                   const std::vector<std::uint64_t>& priorHashes={},
@@ -45,8 +48,11 @@ private:
         std::int16_t score=0;
         std::int16_t depth=-1;
         std::uint8_t bound=0; // 0 exact, 1 lower, 2 upper
+        std::uint8_t age=0;
     };
     std::vector<TTEntry> tt;
+    std::uint8_t ttAge=0;
+    game::Move rootBestMove{};
     std::atomic<bool> stopped{false};
     std::chrono::steady_clock::time_point started;
     Limits limits;
@@ -58,9 +64,10 @@ private:
     bool expired();
     bool draw(const game::Position& pos) const;
     int evaluate(const game::Position& pos) const;
+    int see(const game::Position& pos, game::Move move) const;
     int moveScore(const game::Position& pos, game::Move m, game::Move hashMove, int ply) const;
     int quiescence(game::Position& pos, int alpha, int beta, int ply);
-    int negamax(game::Position& pos, int depth, int alpha, int beta, int ply);
+    int negamax(game::Position& pos, int depth, int alpha, int beta, int ply, bool allowNull=true);
     std::vector<game::Move> principalVariation(game::Position pos, int length);
 };
 } // namespace chess::engine
