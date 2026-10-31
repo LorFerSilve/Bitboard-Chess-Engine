@@ -318,8 +318,14 @@ int Engine::moveScore(const game::Position& pos, game::Move m, game::Move hashMo
     if(victim) {
         int estimate=values[victim]*16-values[kind(pos.board[m.from])];
         // Losing exchanges are searched after quiet killer/history moves.
-        if(values[victim]<values[kind(pos.board[m.from])] && see(pos,m)<0)
-            return -15000+estimate;
+        if(values[victim]<values[kind(pos.board[m.from])]) {
+            // Most unfavorable-looking captures are undefended. Test attackers
+            // on the destination after vacating the source before invoking the
+            // much costlier legal recapture simulation.
+            const auto occupied=(pos.occupied[0]|pos.occupied[1]) & ~(1ULL<<m.from);
+            if(pos.attackersTo(m.to,!pos.whiteToMove,occupied) && see(pos,m)<0)
+                return -15000+estimate;
+        }
         return 100000+estimate;
     }
     if(m==killers[ply][0])return 80000;
