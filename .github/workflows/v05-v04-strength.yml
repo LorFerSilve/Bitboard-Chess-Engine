@@ -1,0 +1,45 @@
+name: v0.5 vs v0.4 paired Elo match
+
+on:
+  push:
+    branches:
+      - bench/v05-v04-200games
+
+jobs:
+  elo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build candidate from v0.5
+        run: |
+          cmake -S . -B build-v05 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build-v05 --config Release --parallel 2
+      - name: Build fastchess
+        run: |
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+          /tmp/fastchess/fastchess -version || true
+      - name: Paired match (200 games, 3+0.03, 2 workers)
+        run: |
+          mkdir -p results
+          printf 'Candidate commit: %s\nBaseline commit: %s\nFastchess commit: %s\nCPU: %s\n' \
+            "$(git rev-parse HEAD)" "492519e23d60682098ae00310307fed358fc6f24" \
+            "$(git -C /tmp/fastchess rev-parse HEAD)" "$(lscpu | grep 'Model name' | head -1)" \
+            | tee results/build-environment.txt
+          python tools/strength_test.py \
+            --candidate build-v05/bitboard-chess-engine \
+            --baseline-ref 492519e23d60682098ae00310307fed358fc6f24 \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 100 --tc 3+0.03 \
+            --concurrency 2 --hash 16 --seed 20261031 \
+            --out results/v05-v04-200games
+      - name: Store reproducible match logs and games
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v05-v04-200games
+          path: results/
+          if-no-files-found: warn
