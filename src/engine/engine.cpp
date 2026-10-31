@@ -245,13 +245,14 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
     if(ply>=MaxPly-1)return check && !pos.hasLegalMove()?-Mate+ply:evaluate(pos);
     int stand=-Mate;
     if(!check) {
-        // A quiet stalemate must not be scored as a material advantage.
-        if(!pos.hasLegalMove())return 0;
         stand=evaluate(pos);
-        if(stand>=beta)return beta;
+        // Stand-pat is not legal in a stalemate, so validate before a cutoff.
+        if(stand>=beta)return pos.hasLegalMove()?beta:0;
         alpha=std::max(alpha,stand);
     }
-    game::MoveList moves;pos.pseudoMoves(moves);
+    game::MoveList moves;
+    // Generate only captures/promotions; checks still require every evasion.
+    pos.pseudoMoves(moves,!check);
     std::array<int,game::MAX_MOVES> scores{};
     for(int i=0;i<moves.size;++i)scores[i]=moveScore(pos,moves[i],{},ply);
     int legal=0;
@@ -283,6 +284,10 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
         alpha=std::max(alpha,score);
     }
     if(check && !legal)return -Mate+ply;
+    // Captures exist in almost every tactical leaf. Only check for a quiet
+    // stalemate when *none* is legal; this avoids an expensive full legal
+    // move scan at most quiescence nodes.
+    if(!check && !legal && !pos.hasLegalMove())return 0;
     return alpha;
 }
 int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,bool allowNull) {
@@ -296,6 +301,10 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     if(inCheck)++depth; // check extension
     const int originalAlpha=alpha;
     const bool pvNode=beta-alpha>1;
+    // Only prune late, quiet, nonchecking moves at the shallowest non-PV
+    // frontier, and only after a legal move has already been fully searched.
+    const bool futile=depth==1 && !pvNode && !inCheck &&
+                      alpha<Mate-256 && evaluate(pos)+180<=alpha;
     auto& entry=tt[pos.hash&(tt.size()-1)];
     game::Move hashMove{};
     // At high 50-move counts the position's halfmove clock matters but is not hashed.
@@ -328,6 +337,7 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     for(int i=0;i<moves.size;++i)scores[i]=moveScore(pos,moves[i],hashMove,ply);
     int best=-Mate-100,legal=0;
     game::Move bestMove{};
+    game::MoveList triedQuiets;
     for(int i=0;i<moves.size;++i) {
         int chosen=i;
         for(int j=i+1;j<moves.size;++j)if(scores[j]>scores[chosen])chosen=j;
@@ -340,11 +350,17 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         ++legal;
         history.push_back(pos.hash);
         bool quiet=undo.captured==0 && m.promotion==0;
+        const bool givesCheck=pos.inCheck(pos.whiteToMove);
+        if(futile && legal>1 && best>-Mate+512 && quiet &&
+           kind(undo.moved)!=game::Pawn && !givesCheck) {
+            history.pop_back();pos.unmake(m,undo);
+            continue;
+        }
         int scoreValue;
         if(legal==1) scoreValue=-negamax(pos,depth-1,-beta,-alpha,ply+1);
         else {
             int reduction=0;
-            if(depth>=3 && legal>=4 && quiet && !inCheck && !pos.inCheck(pos.whiteToMove)) {
+            if(depth>=3 && legal>=4 && quiet && !inCheck && !givesCheck) {
                 reduction=1;
                 if(depth>=7 && legal>=8)++reduction;
                 if(depth>=11 && legal>=14)++reduction;
@@ -361,13 +377,22 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         if(scoreValue>best){best=scoreValue;bestMove=m;}
         if(scoreValue>alpha)alpha=scoreValue;
         if(alpha>=beta) {
-            if(quiet){
+            if(quiet) {
                 if(!(m==killers[ply][0])){killers[ply][1]=killers[ply][0];killers[ply][0]=m;}
+                const int delta=std::min(2048,depth*depth*16);
                 auto& bonus=moveHistory[mover?0:1][m.from][m.to];
-                bonus=std::min(70000,bonus+depth*depth);
+                bonus=std::clamp(bonus+delta,-70000,70000);
+                // Quiet moves tried earlier and found inferior should not
+                // repeatedly outrank a move that actually causes a cutoff.
+                for(int j=0;j<triedQuiets.size;++j) {
+                    auto previous=triedQuiets[j];
+                    auto& h=moveHistory[mover?0:1][previous.from][previous.to];
+                    h=std::clamp(h-delta/2,-70000,70000);
+                }
             }
             break;
         }
+        if(quiet)triedQuiets.push(m);
     }
     if(!legal)return inCheck?-Mate+ply:0;
     if(ply==0)rootBestMove=bestMove;
@@ -453,6 +478,10 @@ Result Engine::search(game::Position pos,Limits requested,
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count()),std::move(pv)};
         if(onInfo)onInfo(result.info);
         if(std::abs(score)>=Mate-128)break;
+        // Avoid beginning a likely unfinished iteration near the hard clock
+        // limit. A completed iteration is always preferable to a timeout.
+        if(limits.timeMs>0 && depth>=2 &&
+           result.info.elapsedMs*4>=static_cast<std::uint64_t>(limits.timeMs)*3)break;
     }
     return result;
 }

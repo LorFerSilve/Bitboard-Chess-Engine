@@ -59,7 +59,9 @@ public:
     Bitboard attacksFrom(int square) const; // Pseudo-attacks, including defended friendly squares.
     bool attacked(int square, bool byWhite) const;
     bool inCheck(bool white) const;
-    void pseudoMoves(MoveList& out) const;
+    // tacticalOnly generates captures (including en passant) and promotions.
+    // Search evasions must always use the full generator.
+    void pseudoMoves(MoveList& out, bool tacticalOnly=false) const;
     void legalMoves(MoveList& out);
     bool hasLegalMove();
     bool playUci(std::string_view move);

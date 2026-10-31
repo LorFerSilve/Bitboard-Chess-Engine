@@ -1,6 +1,6 @@
 # Bitboard Chess Engine
 
-A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.4** improves classical evaluation, tactical capture ordering, and search validation. NNUE and Lazy SMP are deliberately deferred.
+A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.5** improves search efficiency, quiet-move ordering, conservative frontier pruning, and clock safety. NNUE and Lazy SMP are deliberately deferred.
 
 This is an **experimental engine**. The improvements below are implementation and correctness changes; **no Elo improvement has yet been established**. The intended process is to run statistically meaningful paired matches using the supplied strength-testing runner before calling any search change a strength improvement.
 
@@ -21,13 +21,20 @@ position startpos moves e2e4 e7e5
 go depth 8
 ```
 
-Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves ...`, `position fen <six fields> moves ...`, `go depth N`, `go movetime N`, `go wtime ... btime ...`, `go nodes N`, `go infinite`, `go perft N`, `stop`, `setoption name Hash value N`, `setoption name SyzygyPath value PATH`, `quit`.
+Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves ...`, `position fen <six fields> moves ...`, `go depth N`, `go movetime N`, `go wtime ... btime ...`, `go nodes N`, `go infinite`, `go perft N`, `stop`, `setoption name Hash value N`, `setoption name Move Overhead value N`, `setoption name SyzygyPath value PATH`, `quit`.
 
 ## Architecture
 
 - **Game** (`include/chess/game.hpp`, `src/game/`): 12 bitboards, square lookup, FEN, move generation, reversible make/unmake, incremental Zobrist hashing, and Perft. `attacksFrom()` exposes pseudo-attacks to evaluation and future interfaces.
 - **Engine** (`include/chess/engine.hpp`, `src/engine/`): single-core iterative deepening, PVS/alpha-beta, aspiration windows, quiescence, null-move pruning, LMR, legal-recature-aware static exchange evaluation for ordering, TT, history/killer ordering, tapered classical evaluation, and optional Syzygy probing.
 - **View** (`src/view/uci.cpp`): asynchronous UCI adapter; a future GUI can use Game and Engine directly.
+
+### v0.5 changes
+
+- Quiescence generates and sorts only captures/promotions unless in check, and delays expensive stalemate verification until needed. Stand-pat beta cutoffs still verify that at least one legal move exists.
+- Quiet history updates now reward cutoff moves and penalize previously tried quiet failures; shallow non-PV futility pruning skips selected nonchecking non-pawn quiets only after a searched legal move.
+- A configurable UCI `Move Overhead` option (default 20 ms) reserves time from the clock. Iterative deepening stops starting new iterations once 75% of the hard budget is consumed.
+- All pruning/evaluation changes remain **strength hypotheses**, not proven Elo improvements. Verify with paired matches against v0.4 before calling v0.5 stronger.
 
 ### v0.4 changes
 

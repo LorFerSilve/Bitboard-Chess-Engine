@@ -24,6 +24,28 @@ int main() {
     auto tactical=game::Position::fromFen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
     CHECK(tactical.perft(4)==43238);
     CHECK(tactical.perft(5)==674624);
+    // The dedicated tactical generator must match the full pseudo generator
+    // after filtering captures/promotions, including quiet promotions and EP.
+    for(const auto* fen : {
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        "4k3/P7/8/8/8/8/8/4K3 w - - 0 1",
+        "4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1",
+        "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
+    }) {
+        auto sample=game::Position::fromFen(fen);
+        game::MoveList all,captures;
+        sample.pseudoMoves(all);
+        sample.pseudoMoves(captures,true);
+        int n=0;
+        for(int i=0;i<all.size;++i) {
+            auto m=all[i];
+            if(m.promotion || m.flag==game::EnPassant || sample.board[m.to]) {
+                CHECK(n<captures.size && captures[n]==m);
+                ++n;
+            }
+        }
+        CHECK(captures.size==n);
+    }
     auto castleAndPromotion=game::Position::fromFen("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
     CHECK(castleAndPromotion.perft(3)==9467);
     CHECK(castleAndPromotion.perft(4)==422333);
