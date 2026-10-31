@@ -2,6 +2,7 @@
 
 #include "chess/game.hpp"
 #include "chess/tablebase.hpp"
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -53,6 +54,8 @@ private:
         std::uint8_t bound=0; // 0 exact, 1 lower, 2 upper
         std::uint8_t age=0;
     };
+    // Four-entry clusters reduce destructive hash collisions.
+    static constexpr std::size_t TTClusterSize=4;
     std::vector<TTEntry> tt;
     Tablebase tablebase;
     std::uint8_t ttAge=0;
