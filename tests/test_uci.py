@@ -57,7 +57,7 @@ for name in heuristics:
     commands.extend([f"setoption name {name} value true",
                      f"setoption name {name} value false"])
 commands.extend(["setoption name All Heuristics value true", "isready", "quit"])
-r = subprocess.run([engine], input="\\n".join(commands) + "\\n",
+r = subprocess.run([engine], input="\n".join(commands) + "\n",
                    text=True, capture_output=True, timeout=8, check=True)
 assert "info string error" not in r.stdout, r.stdout
 assert "info string heuristic All Heuristics=false" in r.stdout
