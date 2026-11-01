@@ -16,11 +16,11 @@ jobs:
       max-parallel: 5
       matrix:
         include:
-          - { variant: all-off, tt: "false", null: "false", aspiration: "false" }
-          - { variant: tt, tt: "true", null: "false", aspiration: "false" }
-          - { variant: tt-null, tt: "true", null: "true", aspiration: "false" }
-          - { variant: tt-aspiration, tt: "true", null: "false", aspiration: "true" }
-          - { variant: tt-null-aspiration, tt: "true", null: "true", aspiration: "true" }
+          - { variant: all-off, tt: "false", null_verify: "false", aspiration: "false" }
+          - { variant: tt, tt: "true", null_verify: "false", aspiration: "false" }
+          - { variant: tt-null, tt: "true", null_verify: "true", aspiration: "false" }
+          - { variant: tt-aspiration, tt: "true", null_verify: "false", aspiration: "true" }
+          - { variant: tt-null-aspiration, tt: "true", null_verify: "true", aspiration: "true" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +38,7 @@ jobs:
         env:
           VARIANT: ${{ matrix.variant }}
           TT: ${{ matrix.tt }}
-          NULL_VERIFY: ${{ matrix.null }}
+          NULL_VERIFY: ${{ matrix.null_verify }}
           ASPIRATION: ${{ matrix.aspiration }}
         run: |
           python tools/strength_test.py \
