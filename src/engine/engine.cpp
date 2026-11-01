@@ -285,7 +285,7 @@ int Engine::evaluate(const game::Position& pos) const {
             const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
             const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
             const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
-                mg+=(color==0?-1:1)*kingPenalty;
+            mg+=(color==0?-1:1)*kingPenalty;
         }
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
             const int side=color==0?1:-1;
