@@ -1,0 +1,89 @@
+name: v0.6 single-heuristic ablation
+
+on:
+  workflow_dispatch:
+    inputs:
+      heuristic:
+        description: "Experimental heuristic to isolate"
+        required: true
+        type: choice
+        options:
+          - Clustered TT
+          - Null Verification
+          - History LMR
+          - Adaptive Aspiration
+          - SEE Prefilter
+          - King Pressure
+          - Pawn Support
+          - Weak Pawns
+          - Pawn Forks
+          - Knight Forks
+      comparison:
+        description: "All-off + one-on, or all-on vs one-off"
+        required: true
+        default: isolated
+        type: choice
+        options:
+          - isolated
+          - leave-one-out
+      rounds:
+        description: "Number of paired openings (2 games each)"
+        required: true
+        default: "100"
+        type: string
+      time_control:
+        description: "Fastchess clock, e.g. 3+0.03"
+        required: true
+        default: "3+0.03"
+        type: string
+  push:
+    paths:
+      - .github/workflows/v06-heuristic-ablation.yml
+
+jobs:
+  ablation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HEURISTIC: ${{ inputs.heuristic || 'King Pressure' }}
+      COMPARISON: ${{ inputs.comparison || 'isolated' }}
+      ROUNDS: ${{ inputs.rounds || '4' }}
+      TIME_CONTROL: ${{ inputs.time_control || '1+0.01' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate requested benchmark parameters
+        run: |
+          python - <<'PY'
+          import os, re
+          rounds = os.environ["ROUNDS"]
+          clock = os.environ["TIME_CONTROL"]
+          if not rounds.isdigit() or not 1 <= int(rounds) <= 10000:
+              raise SystemExit("rounds must be between 1 and 10000")
+          if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?\+[0-9]+(?:\.[0-9]+)?", clock):
+              raise SystemExit("time_control must be a standard seconds+increment clock")
+          PY
+      - name: Build engine and run regression suite
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Build Fastchess
+        run: |
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Run isolated heuristic comparison
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --fastchess /tmp/fastchess/fastchess \
+            --ablation "$HEURISTIC" --ablation-mode "$COMPARISON" \
+            --mode fixed --rounds "$ROUNDS" --tc "$TIME_CONTROL" \
+            --hash 16 --seed 20261031 --concurrency 2 \
+            --out results/single-heuristic
+      - name: Save PGNs, logs and option metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v06-single-heuristic-results
+          path: results/
+          if-no-files-found: warn
