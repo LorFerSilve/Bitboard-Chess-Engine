@@ -171,5 +171,31 @@ int main() {
             if(legalChoices[i]==searched.best)matches=true;
         CHECK(matches);
     }
+    // Switches must be independently writable and readable; no heuristic may
+    // implicitly alter another. Search must still work with everything off.
+    engine::Engine ablation(2);
+    for(auto name:engine::HeuristicNames) {
+        CHECK(ablation.heuristicEnabled(name));
+        CHECK(ablation.setHeuristic(name,false));
+        CHECK(!ablation.heuristicEnabled(name));
+        CHECK(ablation.setHeuristic(name,true));
+        CHECK(ablation.heuristicEnabled(name));
+    }
+    CHECK(!ablation.setHeuristic("unknown heuristic",false));
+    ablation.setAllHeuristics(false);
+    for(auto name:engine::HeuristicNames)CHECK(!ablation.heuristicEnabled(name));
+    engine::Limits ablationLimits;ablationLimits.depth=3;
+    ablation.prepareSearch();
+    auto disabledSearch=ablation.search(game::Position::start(),ablationLimits);
+    CHECK(disabledSearch.info.depth==3 && static_cast<bool>(disabledSearch.best));
+    CHECK(ablation.setHeuristic("King Pressure",true));
+    CHECK(ablation.heuristicEnabled("King Pressure"));
+    for(auto name:engine::HeuristicNames)
+        if(name!="King Pressure")CHECK(!ablation.heuristicEnabled(name));
+    ablation.prepareSearch();
+    auto singleSearch=ablation.search(game::Position::start(),ablationLimits);
+    CHECK(singleSearch.info.depth==3 && static_cast<bool>(singleSearch.best));
+    ablation.setAllHeuristics(true);
+    for(auto name:engine::HeuristicNames)CHECK(ablation.heuristicEnabled(name));
     std::cout<<"All game/search tests passed\n";
 }
