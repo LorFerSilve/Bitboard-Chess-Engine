@@ -14,7 +14,25 @@ int kingDistanceToCenter(int square) {
     return std::abs(2*f-7)+std::abs(2*r-7);
 }
 }
-Engine::Engine(std::size_t hashMb){resizeHash(hashMb);}
+Engine::Engine(std::size_t hashMb) {
+    heuristics_.fill(true);
+    resizeHash(hashMb);
+}
+bool Engine::setHeuristic(std::string_view name,bool value) {
+    const auto it=std::find(HeuristicNames.begin(),HeuristicNames.end(),name);
+    if(it==HeuristicNames.end())return false;
+    const auto i=static_cast<std::size_t>(it-HeuristicNames.begin());
+    if(heuristics_[i]!=value){heuristics_[i]=value;clearHash();}
+    return true;
+}
+bool Engine::heuristicEnabled(std::string_view name) const {
+    const auto it=std::find(HeuristicNames.begin(),HeuristicNames.end(),name);
+    return it!=HeuristicNames.end() && heuristics_[static_cast<std::size_t>(it-HeuristicNames.begin())];
+}
+void Engine::setAllHeuristics(bool value) {
+    heuristics_.fill(value);
+    clearHash();
+}
 void Engine::resizeHash(std::size_t mb) {
     mb=std::clamp<std::size_t>(mb,1,1024);
     // Power-of-two table avoids costly integer division in every probe.
@@ -117,15 +135,17 @@ int Engine::evaluate(const game::Position& pos) const {
                 if(!(ownPawns&masks.neighbours[file])){middle-=13;end-=10;}
                 if(std::popcount(ownPawns&masks.files[file])>1){middle-=11;end-=15;}
                 // Supported pawn chains are more robust than lone pawns.
-                if(pawnAttacks[color]&(1ULL<<sq)){middle+=8;end+=9;}
+                if(enabled(Heuristic::PawnSupport) && (pawnAttacks[color]&(1ULL<<sq))){
+                    middle+=8;end+=9;
+                }
                 const int front=sq+(white?8:-8);
-                if(front>=0&&front<64 && (pawnAttacks[1-color]&(1ULL<<front)) &&
+                if(enabled(Heuristic::WeakPawns) && front>=0&&front<64 && (pawnAttacks[1-color]&(1ULL<<front)) &&
                    !(pawnAttacks[color]&(1ULL<<sq)) &&
                    !(ownPawns&masks.neighbours[file])) {
                     middle-=10;end-=7;
                 }
                 // A one-push pawn fork is an immediate tactical opportunity.
-                if(front>=0&&front<64 && pos.board[front]==0) {
+                if(enabled(Heuristic::PawnForks) && front>=0&&front<64 && pos.board[front]==0) {
                     const int targetRank=rank+2;
                     if(targetRank<=7) {
                         int valuables=0;
@@ -167,18 +187,20 @@ int Engine::evaluate(const game::Position& pos) const {
                 const auto otherTargets=pos.bitboards[1-color][game::Knight-1] |
                                          pos.bitboards[1-color][game::Bishop-1];
                 const auto victims=enemyValuables|otherTargets;
-                if(std::popcount(pieceAttacks&victims)>=2 &&
-                   (pieceAttacks&enemyValuables)){middle+=23;end+=18;}
-                int reachableForks=0;
-                game::Bitboard destinations=pieceAttacks&~pos.occupied[color]&~pawnAttacks[1-color];
-                while(destinations) {
-                    const int target=std::countr_zero(destinations);
-                    destinations&=destinations-1;
-                    const auto threats=knightTargets[target]&victims;
-                    if(std::popcount(threats)>=2 && (threats&enemyValuables))++reachableForks;
+                if(enabled(Heuristic::KnightForks)) {
+                    if(std::popcount(pieceAttacks&victims)>=2 &&
+                       (pieceAttacks&enemyValuables)){middle+=23;end+=18;}
+                    int reachableForks=0;
+                    game::Bitboard destinations=pieceAttacks&~pos.occupied[color]&~pawnAttacks[1-color];
+                    while(destinations) {
+                        const int target=std::countr_zero(destinations);
+                        destinations&=destinations-1;
+                        const auto threats=knightTargets[target]&victims;
+                        if(std::popcount(threats)>=2 && (threats&enemyValuables))++reachableForks;
+                    }
+                    middle+=std::min(22,reachableForks*5);
+                    end+=std::min(12,reachableForks*3);
                 }
-                middle+=std::min(22,reachableForks*5);
-                end+=std::min(12,reachableForks*3);
                 // Pawns defending a central knight outpost.
                 if(rank>=3 && rank<=5) {
                     const int supportRank=(sq>>3)+(white?-1:1);
@@ -255,7 +277,8 @@ int Engine::evaluate(const game::Position& pos) const {
         const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
         const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
         const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
-        mg+=(color==0?-1:1)*kingPenalty;
+        if(enabled(Heuristic::KingPressure))
+            mg+=(color==0?-1:1)*kingPenalty;
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
             const int side=color==0?1:-1;
             mg+=side*28;eg+=side*35;
@@ -323,7 +346,8 @@ int Engine::moveScore(const game::Position& pos, game::Move m, game::Move hashMo
             // on the destination after vacating the source before invoking the
             // much costlier legal recapture simulation.
             const auto occupied=(pos.occupied[0]|pos.occupied[1]) & ~(1ULL<<m.from);
-            if(pos.attackersTo(m.to,!pos.whiteToMove,occupied) && see(pos,m)<0)
+            if((!enabled(Heuristic::SeePrefilter) ||
+                pos.attackersTo(m.to,!pos.whiteToMove,occupied)) && see(pos,m)<0)
                 return -15000+estimate;
         }
         return 100000+estimate;
@@ -401,13 +425,17 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     // frontier, and only after a legal move has already been fully searched.
     const bool futile=depth==1 && !pvNode && !inCheck &&
                       alpha<Mate-256 && evaluate(pos)+180<=alpha;
-    const auto bucket=(pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize;
+    const bool clustered=enabled(Heuristic::ClusteredTT);
+    const auto bucket=clustered
+        ? (pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize
+        : (pos.hash&(tt.size()-1));
+    const auto bucketSize=clustered?TTClusterSize:std::size_t{1};
     TTEntry* hit=nullptr;
     TTEntry* victim=&tt[bucket];
     auto replaceWeight=[&](const TTEntry& e) {
         return e.key==0?-100000:(e.age==ttAge?e.depth:e.depth-8);
     };
-    for(std::size_t j=0;j<TTClusterSize;++j) {
+    for(std::size_t j=0;j<bucketSize;++j) {
         auto& candidate=tt[bucket+j];
         if(candidate.key==pos.hash){hit=&candidate;break;}
         if(replaceWeight(candidate)<replaceWeight(*victim))victim=&candidate;
@@ -437,7 +465,7 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         history.pop_back();history.pop_back();pos.unmakeNull(undo);
         if(expired())return 0;
         if(value>=beta) {
-            if(depth<8)return beta;
+            if(!enabled(Heuristic::NullVerification) || depth<8)return beta;
             const int verified=negamax(pos,depth-4,beta-1,beta,ply,false);
             if(expired())return 0;
             if(verified>=beta)return beta;
@@ -475,9 +503,11 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
                 reduction=1;
                 if(depth>=7 && legal>=8)++reduction;
                 if(depth>=11 && legal>=14)++reduction;
-                const int historyScore=moveHistory[mover?0:1][m.from][m.to];
-                if(historyScore>1000 && reduction>0)--reduction;
-                if(historyScore< -2000 && depth>=6 && legal>=7)++reduction;
+                if(enabled(Heuristic::HistoryLMR)) {
+                    const int historyScore=moveHistory[mover?0:1][m.from][m.to];
+                    if(historyScore>1000 && reduction>0)--reduction;
+                    if(historyScore< -2000 && depth>=6 && legal>=7)++reduction;
+                }
                 // Preserve the principal variation, and never reduce below 1 ply.
                 if(pvNode && reduction>1)--reduction;
                 reduction=std::min(reduction,depth-2);
@@ -513,7 +543,10 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     // Prefer replacing old entries and shallower entries; exact scores carry the most value.
     if(ttSafe) {
         auto& entry=hit?*hit:*victim;
-        if(!hit || depth>=entry.depth || (best>originalAlpha && best<beta)) {
+        if((clustered && (!hit || depth>=entry.depth ||
+                     (best>originalAlpha && best<beta))) ||
+           (!clustered && (entry.key==pos.hash || entry.age!=ttAge ||
+                          depth>=entry.depth || (best>originalAlpha && best<beta)))) {
             entry.key=pos.hash;entry.move=bestMove;entry.depth=static_cast<std::int16_t>(depth);
             int stored=best;
             if(stored>Mate-512)stored+=ply;
@@ -528,9 +561,12 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
 std::vector<game::Move> Engine::principalVariation(game::Position pos,int length) {
     std::vector<game::Move> pv;
     for(int i=0;i<length;++i) {
-        const auto bucket=(pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize;
+        const bool clustered=enabled(Heuristic::ClusteredTT);
+        const auto bucket=clustered
+            ? (pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize
+            : (pos.hash&(tt.size()-1));
         const TTEntry* entry=nullptr;
-        for(std::size_t j=0;j<TTClusterSize;++j)
+        for(std::size_t j=0;j<(clustered?TTClusterSize:std::size_t{1});++j)
             if(tt[bucket+j].key==pos.hash){entry=&tt[bucket+j];break;}
         if(!entry||!static_cast<bool>(entry->move))break;
         game::MoveList moves;pos.legalMoves(moves);
@@ -578,6 +614,10 @@ Result Engine::search(game::Position pos,Limits requested,
             score=negamax(pos,depth,alpha,beta,0);
             if(expired())break;
             if(score>alpha && score<beta)break;
+            if(!enabled(Heuristic::AdaptiveAspiration)) {
+                score=negamax(pos,depth,-Mate-100,Mate+100,0);
+                break;
+            }
             delta=std::min(delta*2,Mate+100);
             if(score<=alpha)alpha=std::max(-Mate-100,score-delta);
             else beta=std::min(Mate+100,score+delta);
