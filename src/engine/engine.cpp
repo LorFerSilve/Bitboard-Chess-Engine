@@ -125,9 +125,16 @@ int Engine::evaluate(const game::Position& pos) const {
         int middle=0,end=0;
         const game::Bitboard ownPawns=white?whitePawns:blackPawns;
         const game::Bitboard enemyPawns=white?blackPawns:whitePawns;
-        const auto pieceAttacks=type==game::Pawn?pawnAttacks[color]:
-                                (type==game::King?game::Bitboard{0}:pos.attacksFrom(sq));
-        if(type>=game::Knight&&type<=game::Queen)attackMaps[color][type-1]|=pieceAttacks;
+        // Rooks/queens need no attack-map generation if king-pressure
+        // scoring is disabled. Knight/bishop attacks remain needed for mobility.
+        const bool needAttacks=type==game::Knight || type==game::Bishop ||
+            (enabled(Heuristic::KingPressure) &&
+             (type==game::Rook || type==game::Queen));
+        const game::Bitboard pieceAttacks=type==game::Pawn?pawnAttacks[color]:
+            (needAttacks?pos.attacksFrom(sq):game::Bitboard{0});
+        if(enabled(Heuristic::KingPressure) &&
+           type>=game::Knight && type<=game::Queen)
+            attackMaps[color][type-1]|=pieceAttacks;
         switch(type) {
             case game::Pawn: {
                 middle=rank*8+center/2;
@@ -181,13 +188,13 @@ int Engine::evaluate(const game::Position& pos) const {
                 end=center*3+2*(mobility-4);
                 // Static fork awareness: both colors are evaluated symmetrically,
                 // so an opponent's looming knight fork becomes a defensive penalty.
-                const auto enemyValuables=pos.bitboards[1-color][game::Rook-1] |
-                                          pos.bitboards[1-color][game::Queen-1] |
-                                          pos.bitboards[1-color][game::King-1];
-                const auto otherTargets=pos.bitboards[1-color][game::Knight-1] |
-                                         pos.bitboards[1-color][game::Bishop-1];
-                const auto victims=enemyValuables|otherTargets;
                 if(enabled(Heuristic::KnightForks)) {
+                    const auto enemyValuables=pos.bitboards[1-color][game::Rook-1] |
+                                              pos.bitboards[1-color][game::Queen-1] |
+                                              pos.bitboards[1-color][game::King-1];
+                    const auto otherTargets=pos.bitboards[1-color][game::Knight-1] |
+                                             pos.bitboards[1-color][game::Bishop-1];
+                    const auto victims=enemyValuables|otherTargets;
                     if(std::popcount(pieceAttacks&victims)>=2 &&
                        (pieceAttacks&enemyValuables)){middle+=23;end+=18;}
                     int reachableForks=0;
@@ -258,27 +265,28 @@ int Engine::evaluate(const game::Position& pos) const {
         eg+=side*(egValue[type]+end);
     }
     for(int color=0;color<2;++color) {
-        // Count attacked squares immediately surrounding our king, weighting
-        // heavy-piece pressure and multiple attacking piece types. Unlike a
-        // pure pawn-shield term this detects open-file and piece-based attacks.
-        const int kingSq=std::countr_zero(pos.bitboards[color][game::King-1]);
-        const int kingFile=kingSq&7,kingRank=kingSq>>3;
-        game::Bitboard zone=0;
-        for(int df=-1;df<=1;++df)for(int dr=-1;dr<=1;++dr) {
-            const int f=kingFile+df,r=kingRank+dr;
-            if(f>=0&&f<8&&r>=0&&r<8)zone|=1ULL<<(r*8+f);
+        if(enabled(Heuristic::KingPressure)) {
+            // Count attacked squares immediately surrounding our king, weighting
+            // heavy-piece pressure and multiple attacking piece types. Unlike a
+            // pure pawn-shield term this detects open-file and piece-based attacks.
+            const int kingSq=std::countr_zero(pos.bitboards[color][game::King-1]);
+            const int kingFile=kingSq&7,kingRank=kingSq>>3;
+            game::Bitboard zone=0;
+            for(int df=-1;df<=1;++df)for(int dr=-1;dr<=1;++dr) {
+                const int f=kingFile+df,r=kingRank+dr;
+                if(f>=0&&f<8&&r>=0&&r<8)zone|=1ULL<<(r*8+f);
+            }
+            const auto& enemy=attackMaps[1-color];
+            const int pawnHits=std::popcount(zone&enemy[game::Pawn-1]);
+            const int knightHits=std::popcount(zone&enemy[game::Knight-1]);
+            const int bishopHits=std::popcount(zone&enemy[game::Bishop-1]);
+            const int rookHits=std::popcount(zone&enemy[game::Rook-1]);
+            const int queenHits=std::popcount(zone&enemy[game::Queen-1]);
+            const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
+            const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
+            const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
+                mg+=(color==0?-1:1)*kingPenalty;
         }
-        const auto& enemy=attackMaps[1-color];
-        const int pawnHits=std::popcount(zone&enemy[game::Pawn-1]);
-        const int knightHits=std::popcount(zone&enemy[game::Knight-1]);
-        const int bishopHits=std::popcount(zone&enemy[game::Bishop-1]);
-        const int rookHits=std::popcount(zone&enemy[game::Rook-1]);
-        const int queenHits=std::popcount(zone&enemy[game::Queen-1]);
-        const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
-        const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
-        const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
-        if(enabled(Heuristic::KingPressure))
-            mg+=(color==0?-1:1)*kingPenalty;
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
             const int side=color==0?1:-1;
             mg+=side*28;eg+=side*35;
