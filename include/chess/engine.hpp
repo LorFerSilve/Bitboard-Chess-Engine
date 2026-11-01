@@ -8,9 +8,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <string_view>
 #include <vector>
 
 namespace chess::engine {
+// Independent experimental switches; their names are shared with the UCI adapter.
+// "All off" remains a v0.6 control, not a bit-identical v0.5.
+enum class Heuristic : std::size_t {
+    ClusteredTT, NullVerification, HistoryLMR, AdaptiveAspiration,
+    SeePrefilter, KingPressure, PawnSupport, WeakPawns, PawnForks,
+    KnightForks, Count
+};
+inline constexpr std::array<std::string_view,static_cast<std::size_t>(Heuristic::Count)> HeuristicNames{
+    "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
+    "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
+    "Pawn Forks", "Knight Forks"
+};
 struct Limits {
     int depth=64;
     int timeMs=0; // 0 means no clock limit
@@ -34,6 +47,10 @@ public:
     explicit Engine(std::size_t hashMb=32);
     void resizeHash(std::size_t mb);
     void clearHash();
+    // Configure only between searches. Changing a switch clears stale TT data.
+    bool setHeuristic(std::string_view name,bool enabled);
+    bool heuristicEnabled(std::string_view name) const;
+    void setAllHeuristics(bool enabled);
     unsigned setSyzygyPath(std::string_view path);
     unsigned syzygyPieces() const { return tablebase.maxPieces(); }
     // Must be called by the owner before launching a new asynchronous search.
@@ -57,6 +74,8 @@ private:
     // Four-entry clusters reduce destructive hash collisions.
     static constexpr std::size_t TTClusterSize=4;
     std::vector<TTEntry> tt;
+    std::array<bool,HeuristicNames.size()> heuristics_{};
+    bool enabled(Heuristic h) const {return heuristics_[static_cast<std::size_t>(h)];}
     Tablebase tablebase;
     std::uint8_t ttAge=0;
     game::Move rootBestMove{};
