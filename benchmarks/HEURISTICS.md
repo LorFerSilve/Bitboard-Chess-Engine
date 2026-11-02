@@ -18,6 +18,7 @@ Each switch below is independently configurable via a standard UCI `check` optio
 | `Weak Pawns` | New penalty for exposed, unsupported pawns |
 | `Pawn Forks` | New static pawn-fork threat bonuses |
 | `Knight Forks` | New static immediate/potential knight-fork bonuses |
+| `QSearch SEE Pruning` | Reuse move-ordering SEE to skip unfavorable nonchecking quiescence captures; always preserve checks, evasions and promotions |
 
 **Control:** `All Heuristics` toggles all ten settings simultaneously. All off is a *v0.6 control*, not bit-for-bit identical to historical v0.5: some search-correctness changes (e.g. node accounting and artificial-null repetition boundaries) are deliberately always active.
 

@@ -2,7 +2,7 @@
 
 A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.6 development candidate** builds on v0.5 with a clustered transposition table, safer null-move verification, adaptive aspiration windows, and tactical/positional evaluation improvements. NNUE and Lazy SMP remain deferred.
 
-This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The first fully enabled v0.6 prototype **regressed by -45.42 Elo ±39.24** against v0.5. Subsequent [individual screening](benchmarks/results/v0.6-isolated-screen.md) and [combination tests](benchmarks/results/v0.6-combinations.md) have not yet established a positive release gain. The latest [five-way targeted selection](benchmarks/results/v0.6-targeted-selection.md) shortlisted TT + aspiration (+27.85 ±38.85 Elo across 200 games) for a separate confirmation run; this is not yet a validated improvement. **v0.5 remains the strongest validated release**.
+This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The first fully enabled v0.6 prototype **regressed by -45.42 Elo ±39.24** against v0.5. Subsequent [individual screening](benchmarks/results/v0.6-isolated-screen.md) and [combination tests](benchmarks/results/v0.6-combinations.md) have not yet established a positive release gain. The [five-way targeted selection](benchmarks/results/v0.6-targeted-selection.md) shortlisted TT + aspiration (+27.85 ±38.85 Elo over 200 games), but the [400-game confirmation](benchmarks/results/v0.6-tt-aspiration-confirmation.md) finished at **−2.61 ±25.58 Elo**. No v0.6 configuration is a validated strength improvement. A separately switchable **QSearch SEE Pruning** experiment is now awaiting head-to-head evidence. **v0.5 remains the strongest validated release**.
 
 ## Build and test
 
@@ -38,6 +38,7 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 - Cheap recapture-availability screening before expensive legal SEE for unfavorable-looking captures.
 - Tapered evaluation now scores king-zone attacking pressure, pawn-chain support, selected weak pawns, and simple current/one-ply pawn and knight fork threats for both sides. These are *heuristic threats*, not full tactical proof of a forced fork.
 - Threefold-repetition regression test and search tests exercising clustered TT use.
+- Experimental `QSearch SEE Pruning`: avoid searching previously identified SEE-negative captures at quiescence nodes unless the capture gives check; never prune check evasions or promotions. This is a new opt-in testable feature, not an established strength gain.
 
 The v0.6 experimental switches are independently controllable via UCI (see [HEURISTICS.md](benchmarks/HEURISTICS.md)). The first combined prototype lost against v0.5, and the screened combinations have not established superiority. Do not merge all-on defaults into a release without new evidence. Historical v0.5 baseline: `9189218c76bee69c08a7e29dad12650ada2d1b13`.
 
