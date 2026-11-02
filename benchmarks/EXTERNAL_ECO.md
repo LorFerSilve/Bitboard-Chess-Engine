@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-A **new external opening pool** and **longer time control** are now the next validation stage for the v0.6 experimental branch. This file describes the plan **before match outcomes are known**. No Elo gain is claimed. The previously used 95-position `extended.epd` is excluded from the new pool. As the evaluation changes were already developed before this held-out experiment, the independent corpus is useful for confirmation, but this is not a blinded clinical-style experiment.
+This section preserves the **precommitted experimental protocol**. The benchmark has now completed successfully; see the [separate results and release decision](results/v0.6-external-eco.md). None of the five comparisons established a statistically convincing positive Elo gain. A new, disjoint-opening [QSearch confirmation workflow](../.github/workflows/v06-qsearch-confirm.yml) is the next experiment. The previously used 95-position `extended.epd` is excluded from the new pool. As the evaluation changes were already developed before this held-out experiment, the independent corpus is useful for confirmation, but this is not a blinded clinical-style experiment.
 
 ## Data provenance and selection
 
