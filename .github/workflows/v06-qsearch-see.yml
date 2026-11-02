@@ -1,12 +1,8 @@
 name: v0.6 qsearch SEE ablation and v0.5 comparison
 
+# Strength matches are expensive and deliberately run only by explicit dispatch.
+# The regular build workflow tests every push automatically.
 on:
-  push:
-    paths:
-      - .github/workflows/v06-qsearch-see.yml
-      - src/engine/engine.cpp
-      - include/chess/engine.hpp
-      - tests/test_game.cpp
   workflow_dispatch:
 
 jobs:

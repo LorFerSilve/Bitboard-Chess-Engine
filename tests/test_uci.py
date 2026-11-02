@@ -56,15 +56,15 @@ commands = ["uci", "setoption name All Heuristics value false"]
 for name in heuristics:
     commands.extend([f"setoption name {name} value true",
                      f"setoption name {name} value false"])
-commands.extend(["setoption name All Heuristics value true", "isready", "quit"])
+commands.extend(["setoption name All Heuristics value true", "uci", "isready", "quit"])
 r = subprocess.run([engine], input="\n".join(commands) + "\n",
                    text=True, capture_output=True, timeout=8, check=True)
 assert "info string error" not in r.stdout, r.stdout
-assert "option name All Heuristics type check default false" in r.stdout
+assert r.stdout.count("option name All Heuristics type check default false") == 2
 assert "info string heuristic All Heuristics=false" in r.stdout
 for name in heuristics:
     default = "false" if name == "QSearch SEE Pruning" else "true"
-    assert f"option name {name} type check default {default}" in r.stdout, name
+    assert r.stdout.count(f"option name {name} type check default {default}") == 2, name
     assert f"info string heuristic {name}=true" in r.stdout, name
     assert f"info string heuristic {name}=false" in r.stdout, name
 

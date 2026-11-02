@@ -45,7 +45,7 @@ int main() {
                 print("option name All Heuristics type check default false");
                 for(auto name:engine::HeuristicNames)
                     print("option name "+std::string(name)+" type check default "+
-                          std::string(engine.heuristicEnabled(name)?"true":"false"));
+                          std::string(name=="QSearch SEE Pruning"?"false":"true"));
                 print("uciok");
             } else if(command=="isready")print("readyok");
             else if(command=="ucinewgame") {
