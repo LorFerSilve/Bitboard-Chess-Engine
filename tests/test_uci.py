@@ -63,8 +63,7 @@ assert "info string error" not in r.stdout, r.stdout
 assert r.stdout.count("option name All Heuristics type check default false") == 2
 assert "info string heuristic All Heuristics=false" in r.stdout
 for name in heuristics:
-    default = "false" if name == "QSearch SEE Pruning" else "true"
-    assert r.stdout.count(f"option name {name} type check default {default}") == 2, name
+    assert r.stdout.count(f"option name {name} type check default false") == 2, name
     assert f"info string heuristic {name}=true" in r.stdout, name
     assert f"info string heuristic {name}=false" in r.stdout, name
 

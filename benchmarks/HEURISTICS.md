@@ -4,7 +4,7 @@
 
 Reject or keep individual search/evaluation heuristics based on measured playing strength rather than code complexity. The first **combined** v0.6 experiment scored **-45.42 ± 39.24 Elo** versus v0.5. The initial *group* ablations were also negative: search-only **-96.19 ± 37.42 Elo**, evaluation-only **-22.62 ± 34.19 Elo** (each at 200 games, 3+0.03). These are **not** measurements of individual heuristics.
 
-Each switch below is independently configurable via a standard UCI `check` option, and clears the transposition table when modified. The first ten switches still default to `true`; **`QSearch SEE Pruning` defaults to `false`** because its initial tests did not establish a strength gain:
+Each switch below is independently configurable via a standard UCI `check` option and clears the transposition table when modified. **All eleven experimental heuristics default to `false`**: the all-enabled v0.6 configuration regressed against historical v0.5 and none of the individual options has established a reproducible strength gain. They remain available for controlled ablations:
 
 | UCI heuristic name | What is switched |
 | --- | --- |
@@ -20,7 +20,7 @@ Each switch below is independently configurable via a standard UCI `check` optio
 | `Knight Forks` | New static immediate/potential knight-fork bonuses |
 | `QSearch SEE Pruning` | Reuse move-ordering SEE to skip unfavorable nonchecking quiescence captures; always preserve checks, evasions and promotions |
 
-**Control:** `All Heuristics` toggles all eleven settings simultaneously (UCI reports default `false` because not all options start enabled). All off is a *v0.6 control*, not bit-for-bit identical to historical v0.5: some search-correctness changes (e.g. node accounting and artificial-null repetition boundaries) are deliberately always active.
+**Control:** `All Heuristics` toggles all eleven settings simultaneously. It defaults to `false`; a new v0.6 engine therefore starts with all experimental switches off. This all-off v0.6 control is still not bit-for-bit identical to historical v0.5. Some search-correctness changes (e.g. node accounting and artificial-null repetition boundaries) are deliberately always active.
 
 ## One controlled experiment, one executable
 

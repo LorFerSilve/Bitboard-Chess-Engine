@@ -174,10 +174,9 @@ int main() {
     // Switches must be independently writable and readable; no heuristic may
     // implicitly alter another. Search must still work with everything off.
     engine::Engine ablation(2);
-    // Unsafe-to-assume-strength heuristics remain opt-in by default.
-    CHECK(!ablation.heuristicEnabled("QSearch SEE Pruning"));
+    // No unvalidated v0.6 heuristic is enabled in a fresh engine.
     for(auto name:engine::HeuristicNames) {
-        CHECK(ablation.heuristicEnabled(name)==(name!="QSearch SEE Pruning"));
+        CHECK(!ablation.heuristicEnabled(name));
         CHECK(ablation.setHeuristic(name,false));
         CHECK(!ablation.heuristicEnabled(name));
         CHECK(ablation.setHeuristic(name,true));
