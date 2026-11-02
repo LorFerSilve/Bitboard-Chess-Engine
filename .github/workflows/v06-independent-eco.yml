@@ -91,8 +91,11 @@ jobs:
         run: ./build/chess_search_suite benchmark/external/holdout.epd
       - name: Build pinned Fastchess
         run: |
-          git clone https://github.com/Disservin/fastchess.git /tmp/fastchess
-          git -C /tmp/fastchess checkout 9c64a2e
+          git init -q /tmp/fastchess
+          git -C /tmp/fastchess remote add origin https://github.com/Disservin/fastchess.git
+          git -C /tmp/fastchess fetch --depth 1 origin ebfd64cb7fac80d4822c50b07dca4fe934779d21
+          git -C /tmp/fastchess checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/fastchess rev-parse HEAD)" = "ebfd64cb7fac80d4822c50b07dca4fe934779d21"
           make -C /tmp/fastchess -j2
       - name: Compare same predeclared configurations on shared openings
         env:
