@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HEURISTICS = (
     "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
     "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
-    "Pawn Forks", "Knight Forks",
+    "Pawn Forks", "Knight Forks", "QSearch SEE Pruning",
 )
 
 

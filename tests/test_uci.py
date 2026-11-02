@@ -50,7 +50,7 @@ for fen in [
 heuristics = (
     "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
     "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
-    "Pawn Forks", "Knight Forks",
+    "Pawn Forks", "Knight Forks", "QSearch SEE Pruning",
 )
 commands = ["uci", "setoption name All Heuristics value false"]
 for name in heuristics:

@@ -17,12 +17,12 @@ namespace chess::engine {
 enum class Heuristic : std::size_t {
     ClusteredTT, NullVerification, HistoryLMR, AdaptiveAspiration,
     SeePrefilter, KingPressure, PawnSupport, WeakPawns, PawnForks,
-    KnightForks, Count
+    KnightForks, QSearchSeePruning, Count
 };
 inline constexpr std::array<std::string_view,static_cast<std::size_t>(Heuristic::Count)> HeuristicNames{
     "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
     "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
-    "Pawn Forks", "Knight Forks"
+    "Pawn Forks", "Knight Forks", "QSearch SEE Pruning"
 };
 struct Limits {
     int depth=64;

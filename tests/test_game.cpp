@@ -195,6 +195,26 @@ int main() {
     ablation.prepareSearch();
     auto singleSearch=ablation.search(game::Position::start(),ablationLimits);
     CHECK(singleSearch.info.depth==3 && static_cast<bool>(singleSearch.best));
+    // Check evasions and forcing checks must remain searchable with this
+    // selective quiescence switch enabled.
+    ablation.setAllHeuristics(false);
+    CHECK(ablation.setHeuristic("QSearch SEE Pruning",true));
+    for(const auto* fen : {
+        "7k/8/5KQ1/8/8/8/8/8 w - - 99 1",
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "8/4k3/8/3pP3/8/8/8/4K3 w - d6 0 1"
+    }) {
+        auto position=game::Position::fromFen(fen);
+        game::MoveList legalMoves;position.legalMoves(legalMoves);
+        ablation.prepareSearch();
+        engine::Limits tacticalLimits;tacticalLimits.depth=4;
+        auto test=ablation.search(position,tacticalLimits);
+        CHECK(test.info.depth==4);
+        bool found=false;
+        for(int i=0;i<legalMoves.size;++i)
+            if(test.best==legalMoves[i])found=true;
+        CHECK(found);
+    }
     ablation.setAllHeuristics(true);
     for(auto name:engine::HeuristicNames)CHECK(ablation.heuristicEnabled(name));
     std::cout<<"All game/search tests passed\n";

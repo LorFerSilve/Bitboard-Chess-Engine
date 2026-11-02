@@ -398,6 +398,13 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
         // Checking captures can be tactical even when their immediate material
         // value is small; never apply delta pruning to those moves.
         const bool givesCheck=pos.inCheck(pos.whiteToMove);
+        // Reuse the existing negative-SEE ordering score. Preserve checking
+        // captures, promotions and all legal evasions from check.
+        if(enabled(Heuristic::QSearchSeePruning) && !check && !givesCheck &&
+           scores[i]<0) {
+            pos.unmake(m,undo);
+            continue;
+        }
         if(!check && !givesCheck && !m.promotion &&
            stand+values[captured]+250<alpha) {
             pos.unmake(m,undo);
