@@ -2,7 +2,7 @@
 
 A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.6 development candidate** builds on v0.5 with a clustered transposition table, safer null-move verification, adaptive aspiration windows, and tactical/positional evaluation improvements. NNUE and Lazy SMP remain deferred.
 
-This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The first fully enabled v0.6 prototype **regressed by -45.42 Elo ±39.24** against v0.5. Subsequent [individual screening](benchmarks/results/v0.6-isolated-screen.md) and [combination tests](benchmarks/results/v0.6-combinations.md) have not yet established a positive release gain. **v0.5 remains the strongest validated release**.
+This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The first fully enabled v0.6 prototype **regressed by -45.42 Elo ±39.24** against v0.5. Subsequent [individual screening](benchmarks/results/v0.6-isolated-screen.md) and [combination tests](benchmarks/results/v0.6-combinations.md) have not yet established a positive release gain. The latest [five-way targeted selection](benchmarks/results/v0.6-targeted-selection.md) shortlisted TT + aspiration (+27.85 ±38.85 Elo across 200 games) for a separate confirmation run; this is not yet a validated improvement. **v0.5 remains the strongest validated release**.
 
 ## Build and test
 
