@@ -59,7 +59,7 @@ All eleven v0.6 experimental heuristics are **off by default**, but independentl
 
 ## Independent long-control opening benchmark
 
-The [Lichess ECO independent benchmark protocol](benchmarks/EXTERNAL_ECO.md) uses a fixed, SHA-256-audited 750-position external CC0 corpus, five predeclared 300-game comparisons, 10+0.1 time control, and unchanged historical v0.5. This is a separate validation stage from earlier 95-opening screening; any Elo estimates remain provisional until confirmation.
+The [Lichess ECO independent benchmark](benchmarks/EXTERNAL_ECO.md) **completed all 1,500 games** over five predeclared 300-game comparisons at 10+0.1 on a new 750-position CC0 corpus. [Full results](benchmarks/results/v0.6-external-eco.md): all-off +4.63 ±28.04 Elo, QSearch SEE +24.36 ±26.86, TT + Aspiration −19.71 ±25.92, Null Verification −18.55 ±27.40 (all versus unchanged v0.5); isolated QSearch +16.23 ±28.17 versus all-off v0.6. **Every interval includes zero; no upgrade is validated.** A [new 600-game QSearch confirmation](.github/workflows/v06-qsearch-confirm.yml) is preregistered using an ECO pool excluding every position from both preceding opening books. v0.5 and the all-off v0.6 defaults remain unchanged.
 
 ## Strength testing (Elo / SPRT)
 
