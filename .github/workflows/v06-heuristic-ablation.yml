@@ -18,6 +18,7 @@ on:
           - Weak Pawns
           - Pawn Forks
           - Knight Forks
+          - QSearch SEE Pruning
       comparison:
         description: "All-off + one-on, or all-on vs one-off"
         required: true

@@ -20,7 +20,7 @@ Each switch below is independently configurable via a standard UCI `check` optio
 | `Knight Forks` | New static immediate/potential knight-fork bonuses |
 | `QSearch SEE Pruning` | Reuse move-ordering SEE to skip unfavorable nonchecking quiescence captures; always preserve checks, evasions and promotions |
 
-**Control:** `All Heuristics` toggles all ten settings simultaneously. All off is a *v0.6 control*, not bit-for-bit identical to historical v0.5: some search-correctness changes (e.g. node accounting and artificial-null repetition boundaries) are deliberately always active.
+**Control:** `All Heuristics` toggles all eleven settings simultaneously. All off is a *v0.6 control*, not bit-for-bit identical to historical v0.5: some search-correctness changes (e.g. node accounting and artificial-null repetition boundaries) are deliberately always active.
 
 ## One controlled experiment, one executable
 

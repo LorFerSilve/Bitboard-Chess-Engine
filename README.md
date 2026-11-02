@@ -38,7 +38,7 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 - Cheap recapture-availability screening before expensive legal SEE for unfavorable-looking captures.
 - Tapered evaluation now scores king-zone attacking pressure, pawn-chain support, selected weak pawns, and simple current/one-ply pawn and knight fork threats for both sides. These are *heuristic threats*, not full tactical proof of a forced fork.
 - Threefold-repetition regression test and search tests exercising clustered TT use.
-- Experimental `QSearch SEE Pruning`: avoid searching previously identified SEE-negative captures at quiescence nodes unless the capture gives check; never prune check evasions or promotions. This is a new opt-in testable feature, not an established strength gain.
+- Experimental `QSearch SEE Pruning`: avoid searching previously identified SEE-negative captures at quiescence nodes unless the capture gives check; never prune check evasions or promotions. This switch defaults to enabled in the experimental branch but can be disabled independently; it is not an established strength gain.
 
 The v0.6 experimental switches are independently controllable via UCI (see [HEURISTICS.md](benchmarks/HEURISTICS.md)). The first combined prototype lost against v0.5, and the screened combinations have not established superiority. Do not merge all-on defaults into a release without new evidence. Historical v0.5 baseline: `9189218c76bee69c08a7e29dad12650ada2d1b13`.
 
