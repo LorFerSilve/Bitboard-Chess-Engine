@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - .github/workflows/v06-qsearch-see.yml
+      - src/engine/engine.cpp
+      - include/chess/engine.hpp
+      - tests/test_game.cpp
   workflow_dispatch:
 
 jobs:
