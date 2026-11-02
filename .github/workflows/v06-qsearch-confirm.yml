@@ -1,0 +1,128 @@
+name: v0.6 QSearch SEE independent confirmation (10+0.1)
+
+# Deliberately one prespecified candidate: no additional parameter screening.
+# Creation/change of this workflow starts one confirmation; later runs are manual.
+on:
+  push:
+    paths:
+      - .github/workflows/v06-qsearch-confirm.yml
+  workflow_dispatch:
+
+jobs:
+  confirm:
+    name: QSearch SEE vs historical v0.5 / 600 games
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          repository: lichess-org/chess-openings
+          ref: 712a58be746c143f4ab935b68acc50f4bac813eb
+          path: source-lichess-openings
+          persist-credentials: false
+
+      - name: Install existing benchmark-only PGN parser
+        run: python -m pip install chess==1.11.2
+
+      - name: Reconstruct original book and exclude every prior opening
+        run: |
+          python tools/make_external_book.py \
+            --source-dir source-lichess-openings \
+            --exclude benchmarks/openings/extended.epd \
+            --output benchmark/confirmation/old-holdout.epd \
+            --manifest benchmark/confirmation/old-book.json \
+            --per-volume 150 --seed 20261108
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          old = Path("benchmark/confirmation/old-holdout.epd")
+          expected = "6309f38e2d44c58f1e8353fd3209eb341d141c278a27b1b431fd73cc8dac30c0"
+          assert hashlib.sha256(old.read_bytes()).hexdigest() == expected, "Original ECO book cannot be reproduced"
+          old_positions = old.read_text(encoding="utf-8").splitlines()
+          legacy = Path("benchmarks/openings/extended.epd").read_text(encoding="utf-8").splitlines()
+          excluded = set(legacy) | set(old_positions)
+          assert len(old_positions) == 750 and len(set(old_positions)) == 750
+          assert not set(legacy) & set(old_positions)
+          Path("benchmark/confirmation/excluded.epd").write_text(
+              "\n".join(sorted(excluded)) + "\n", encoding="utf-8"
+          )
+          print("Excluding", len(excluded), "previously used opening positions")
+          PY
+
+      - name: Generate entirely disjoint ECO confirmation pool
+        run: |
+          python tools/make_external_book.py \
+            --source-dir source-lichess-openings \
+            --exclude benchmark/confirmation/excluded.epd \
+            --output benchmark/confirmation/confirm.epd \
+            --manifest benchmark/confirmation/confirm-book.json \
+            --per-volume 80 --seed 20261110
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import chess
+
+          directory = Path("benchmark/confirmation")
+          lines = (directory / "confirm.epd").read_text(encoding="utf-8").splitlines()
+          excluded = set((directory / "excluded.epd").read_text(encoding="utf-8").splitlines())
+          metadata = json.loads((directory / "confirm-book.json").read_text(encoding="utf-8"))
+          assert len(lines) == 400 and len(set(lines)) == 400
+          assert not set(lines) & excluded, "Confirmation reused a screened opening"
+          assert metadata["old_book_overlap"] == 0
+          assert metadata["per_eco_volume"] == {v: 80 for v in "ABCDE"}
+          assert metadata["book_sha256"] == hashlib.sha256((directory / "confirm.epd").read_bytes()).hexdigest()
+          for epd in lines:
+              board = chess.Board(epd + " 0 1")
+              assert board.is_valid() and not board.is_game_over(claim_draw=True)
+          print("400 unique new ECO positions; none of the 845 previously used positions")
+          PY
+
+      - name: Save opening manifest and exclusion evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsearch-confirm-opening-provenance
+          path: benchmark/confirmation/
+          if-no-files-found: error
+
+      - name: Build portable candidate and run regression tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+          ./build/chess_search_suite benchmark/confirmation/confirm.epd
+
+      - name: Build previously verified Fastchess revision
+        run: |
+          git init -q /tmp/fastchess
+          git -C /tmp/fastchess remote add origin https://github.com/Disservin/fastchess.git
+          git -C /tmp/fastchess fetch --depth 1 origin ebfd64cb7fac80d4822c50b07dca4fe934779d21
+          git -C /tmp/fastchess checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/fastchess rev-parse HEAD)" = "ebfd64cb7fac80d4822c50b07dca4fe934779d21"
+          make -C /tmp/fastchess -j2
+
+      - name: Confirm only QSearch SEE against unchanged historical v0.5
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --baseline-ref 9189218c76bee69c08a7e29dad12650ada2d1b13 \
+            --candidate-option "All Heuristics=false" \
+            --candidate-option "QSearch SEE Pruning=true" \
+            --book benchmark/confirmation/confirm.epd \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 300 --tc 10+0.1 --concurrency 2 \
+            --hash 32 --seed 20261111 --out results/qsearch-confirm
+
+      - name: Preserve complete match evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qsearch-confirm-600-games
+          path: |
+            results/
+            benchmark/confirmation/confirm-book.json
+          if-no-files-found: warn
