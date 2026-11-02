@@ -45,6 +45,27 @@ for fen in [
                        text=True, capture_output=True, timeout=3, check=True)
     assert "bestmove 0000" in r.stdout, r.stdout
 
+# Every experimental search/evaluation heuristic must be exposed via UCI and
+# configurable independently without silently ignoring unsupported flags.
+heuristics = (
+    "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
+    "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
+    "Pawn Forks", "Knight Forks", "QSearch SEE Pruning",
+)
+commands = ["uci", "setoption name All Heuristics value false"]
+for name in heuristics:
+    commands.extend([f"setoption name {name} value true",
+                     f"setoption name {name} value false"])
+commands.extend(["setoption name All Heuristics value true", "isready", "quit"])
+r = subprocess.run([engine], input="\n".join(commands) + "\n",
+                   text=True, capture_output=True, timeout=8, check=True)
+assert "info string error" not in r.stdout, r.stdout
+assert "info string heuristic All Heuristics=false" in r.stdout
+for name in heuristics:
+    assert f"option name {name} type check default true" in r.stdout, name
+    assert f"info string heuristic {name}=true" in r.stdout, name
+    assert f"info string heuristic {name}=false" in r.stdout, name
+
 print("UCI integration tests passed")
 
 # No tablebase data or external dependency is required for ordinary builds.

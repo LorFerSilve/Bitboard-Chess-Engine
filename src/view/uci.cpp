@@ -41,6 +41,9 @@ int main() {
                 print("option name Hash type spin default 32 min 1 max 1024");
                 print("option name Move Overhead type spin default 20 min 0 max 1000");
                 print("option name SyzygyPath type string default <empty>");
+                print("option name All Heuristics type check default true");
+                for(auto name:engine::HeuristicNames)
+                    print("option name "+std::string(name)+" type check default true");
                 print("uciok");
             } else if(command=="isready")print("readyok");
             else if(command=="ucinewgame") {
@@ -67,14 +70,26 @@ int main() {
                 gameHistory=std::move(candidateHistory);
             } else if(command=="setoption") {
                 stopSearch();
-                if(input.find("name Hash")!=std::string::npos)engine.resizeHash(parameter(args,"value",32));
-                else if(input.find("name Move Overhead")!=std::string::npos)
+                const auto namePos=input.find("name ");
+                if(namePos==std::string::npos)throw std::invalid_argument("Missing option name");
+                const auto valuePos=input.find(" value ",namePos+5);
+                const std::string name=input.substr(namePos+5,
+                    valuePos==std::string::npos?std::string::npos:valuePos-namePos-5);
+                const std::string value=valuePos==std::string::npos?"":input.substr(valuePos+7);
+                if(name=="Hash")engine.resizeHash(parameter(args,"value",32));
+                else if(name=="Move Overhead")
                     moveOverheadMs=std::clamp(parameter(args,"value",20),0,1000);
-                else if(input.find("name SyzygyPath")!=std::string::npos) {
-                    auto value=input.find(" value ");
-                    std::string path=value==std::string::npos?"":input.substr(value+7);
-                    unsigned pieces=engine.setSyzygyPath(path);
+                else if(name=="SyzygyPath") {
+                    unsigned pieces=engine.setSyzygyPath(value);
                     print("info string Syzygy maximum pieces: "+std::to_string(pieces));
+                } else {
+                    if(value!="true"&&value!="false")
+                        throw std::invalid_argument("Heuristic requires true or false");
+                    const bool enabled=value=="true";
+                    if(name=="All Heuristics")engine.setAllHeuristics(enabled);
+                    else if(!engine.setHeuristic(name,enabled))
+                        throw std::invalid_argument("Unknown heuristic: "+name);
+                    print("info string heuristic "+name+"="+value);
                 }
             } else if(command=="go") {
                 stopSearch();

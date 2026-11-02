@@ -17,6 +17,45 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Match the UCI names in chess::engine::HeuristicNames.
+HEURISTICS = (
+    "Clustered TT", "Null Verification", "History LMR", "Adaptive Aspiration",
+    "SEE Prefilter", "King Pressure", "Pawn Support", "Weak Pawns",
+    "Pawn Forks", "Knight Forks", "QSearch SEE Pruning",
+)
+
+
+def option_name(raw: str) -> str:
+    name, separator, value = raw.rpartition("=")
+    if not separator or not name.strip() or not value.strip():
+        raise ValueError(f"Expected a UCI option formatted as NAME=VALUE, got: {raw!r}")
+    return name
+
+
+def ablation_options(name: str, mode: str) -> tuple[list[str], list[str]]:
+    if name not in HEURISTICS:
+        raise ValueError(f"Unknown heuristic: {name!r}")
+    if mode == "isolated":
+        # Difference: exactly this option; all others disabled in both engines.
+        return ["All Heuristics=false", f"{name}=true"], ["All Heuristics=false"]
+    if mode == "leave-one-out":
+        # Difference: exactly this option; all others enabled in both engines.
+        return [], [f"{name}=false"]
+    raise ValueError(f"Unknown ablation mode: {mode!r}")
+
+
+def verify_uci_options(exe: Path, options: list[str]) -> None:
+    if not options:
+        return
+    result = subprocess.run([str(exe)], input="uci\nquit\n", text=True,
+                            capture_output=True, timeout=10, check=True)
+    for option in options:
+        name = option_name(option)
+        if f"option name {name} type " not in result.stdout:
+            raise ValueError(f"Engine {exe} does not advertise UCI option {name!r}")
+
+
+
 
 def check_binary(path: Path, label: str) -> Path:
     path = path.expanduser().resolve()
@@ -60,9 +99,13 @@ def build_baseline(ref: str, worktree: Path, build_dir: Path) -> Path:
 
 
 def fastchess_command(args, old: Path, new: Path, pgn: Path) -> list[str]:
+    candidate_options = getattr(args, "candidate_option", [])
+    baseline_options = getattr(args, "baseline_option", [])
     cmd = [args.fastchess,
            "-engine", f"cmd={new}", "name=Candidate",
+           *(f"option.{value}" for value in candidate_options),
            "-engine", f"cmd={old}", "name=Baseline",
+           *(f"option.{value}" for value in baseline_options),
            "-each", f"tc={args.tc}", f"option.Hash={args.hash}",
            "-openings", f"file={args.book.resolve()}", "format=epd", "order=random",
            "-srand", str(args.seed),
@@ -81,6 +124,14 @@ def parse_args(argv=None):
     baseline = p.add_mutually_exclusive_group()
     baseline.add_argument("--baseline", type=Path, help="Previously built UCI executable")
     baseline.add_argument("--baseline-ref", help="Git commit/tag to build in an isolated worktree")
+    p.add_argument("--candidate-option", action="append", default=[], metavar="NAME=VALUE",
+                   help="UCI option applied only to candidate; can be repeated")
+    p.add_argument("--baseline-option", action="append", default=[], metavar="NAME=VALUE",
+                   help="UCI option applied only to baseline; can be repeated")
+    p.add_argument("--ablation", choices=HEURISTICS, metavar="HEURISTIC",
+                   help="Use the candidate binary on both sides, toggling exactly one heuristic")
+    p.add_argument("--ablation-mode", choices=("isolated", "leave-one-out"),
+                   default="isolated", help="All-off with one on, or all-on with one off")
     p.add_argument("--fastchess", default="fastchess", help="Fastchess executable in PATH or absolute path")
     p.add_argument("--book", type=Path, default=ROOT / "benchmarks/openings/extended.epd")
     p.add_argument("--mode", choices=("fixed", "sprt"), default="sprt")
@@ -96,6 +147,16 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--dry-run", action="store_true", help="Print command only; do not start matches")
     args = p.parse_args(argv)
+    if args.ablation:
+        if args.baseline or args.baseline_ref or args.candidate_option or args.baseline_option:
+            p.error("--ablation uses the same binary on both sides; omit baseline and manual options")
+        args.candidate_option, args.baseline_option = ablation_options(
+            args.ablation, args.ablation_mode)
+    for option in args.candidate_option + args.baseline_option:
+        try:
+            option_name(option)
+        except ValueError as exc:
+            p.error(str(exc))
     if args.rounds is None:
         args.rounds = 50000 if args.mode == "sprt" else 100
     if args.rounds <= 0 or args.concurrency <= 0 or args.hash <= 0:
@@ -114,7 +175,10 @@ def main(argv=None):
         raise ValueError("Fastchess not found; install it or pass --fastchess PATH")
     with ExitStack() as stack:
         worktree = None
-        if args.baseline:
+        if args.ablation:
+            baseline = candidate
+            baseline_ref = "same executable (per-heuristic ablation)"
+        elif args.baseline:
             baseline = check_binary(args.baseline, "Baseline")
             baseline_ref = "external executable"
         else:
@@ -125,6 +189,8 @@ def main(argv=None):
             baseline_ref = args.baseline_ref or "HEAD^"
             baseline = build_baseline(baseline_ref, worktree, temp / "build")
         try:
+            verify_uci_options(candidate, args.candidate_option)
+            verify_uci_options(baseline, args.baseline_option)
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             outdir = (args.out or ROOT / "results" / stamp).resolve()
             command = fastchess_command(args, baseline, candidate, outdir / "games.pgn")
@@ -137,6 +203,10 @@ def main(argv=None):
                 "candidate": str(candidate), "candidate_sha256": sha256(candidate),
                 "baseline": str(baseline), "baseline_sha256": sha256(baseline),
                 "baseline_ref": baseline_ref, "current_revision": current_revision(),
+                "candidate_options": args.candidate_option,
+                "baseline_options": args.baseline_option,
+                "ablation_heuristic": args.ablation,
+                "ablation_mode": args.ablation_mode if args.ablation else None,
                 "opening_book": str(args.book.resolve()),
                 "opening_book_sha256": sha256(args.book),
                 "mode": args.mode, "command": command, "rounds_limit": args.rounds,

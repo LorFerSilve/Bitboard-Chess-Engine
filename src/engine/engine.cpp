@@ -14,12 +14,30 @@ int kingDistanceToCenter(int square) {
     return std::abs(2*f-7)+std::abs(2*r-7);
 }
 }
-Engine::Engine(std::size_t hashMb){resizeHash(hashMb);}
+Engine::Engine(std::size_t hashMb) {
+    heuristics_.fill(true);
+    resizeHash(hashMb);
+}
+bool Engine::setHeuristic(std::string_view name,bool value) {
+    const auto it=std::find(HeuristicNames.begin(),HeuristicNames.end(),name);
+    if(it==HeuristicNames.end())return false;
+    const auto i=static_cast<std::size_t>(it-HeuristicNames.begin());
+    if(heuristics_[i]!=value){heuristics_[i]=value;clearHash();}
+    return true;
+}
+bool Engine::heuristicEnabled(std::string_view name) const {
+    const auto it=std::find(HeuristicNames.begin(),HeuristicNames.end(),name);
+    return it!=HeuristicNames.end() && heuristics_[static_cast<std::size_t>(it-HeuristicNames.begin())];
+}
+void Engine::setAllHeuristics(bool value) {
+    heuristics_.fill(value);
+    clearHash();
+}
 void Engine::resizeHash(std::size_t mb) {
     mb=std::clamp<std::size_t>(mb,1,1024);
     // Power-of-two table avoids costly integer division in every probe.
-    const auto requested=std::max<std::size_t>(1,mb*1024*1024/sizeof(TTEntry));
-    tt.assign(std::bit_floor(requested),{});
+    const auto requested=std::max<std::size_t>(TTClusterSize,mb*1024*1024/sizeof(TTEntry));
+    tt.assign(std::bit_floor(requested/TTClusterSize)*TTClusterSize,{});
 }
 unsigned Engine::setSyzygyPath(std::string_view path) {
     clearHash();
@@ -40,8 +58,10 @@ bool Engine::draw(const game::Position& pos) const {
     int seen=0;
     // Only reversible moves can create a repetition of the current position.
     int start=std::max<int>(0,static_cast<int>(history.size())-1-pos.halfmove);
-    for(int i=static_cast<int>(history.size())-2;i>=start;--i)
+    for(int i=static_cast<int>(history.size())-2;i>=start;--i) {
+        if(history[i]==0)break; // Do not cross an artificial null move.
         if(history[i]==pos.hash && ++seen>=2)return true;
+    }
     return false;
 }
 int Engine::evaluate(const game::Position& pos) const {
@@ -71,6 +91,26 @@ int Engine::evaluate(const game::Position& pos) const {
     }();
     const auto whitePawns=pos.bitboards[0][game::Pawn-1];
     const auto blackPawns=pos.bitboards[1][game::Pawn-1];
+    const auto fileH=fileA<<7;
+    const std::array<game::Bitboard,2> pawnAttacks{
+        ((whitePawns&~fileA)<<7)|((whitePawns&~fileH)<<9),
+        ((blackPawns&~fileA)>>9)|((blackPawns&~fileH)>>7)
+    };
+    // Aggregate piece attacks by type. This makes king pressure and tactical
+    // vulnerability cheap to evaluate without generating legal moves.
+    std::array<std::array<game::Bitboard,6>,2> attackMaps{};
+    static const auto knightTargets=[] {
+        std::array<game::Bitboard,64> result{};
+        constexpr int df[]={1,2,2,1,-1,-2,-2,-1};
+        constexpr int dr[]={2,1,-1,-2,-2,-1,1,2};
+        for(int sq=0;sq<64;++sq)for(int i=0;i<8;++i){
+            const int f=(sq&7)+df[i],r=(sq>>3)+dr[i];
+            if(f>=0&&f<8&&r>=0&&r<8)result[sq]|=1ULL<<(r*8+f);
+        }
+        return result;
+    }();
+    attackMaps[0][game::Pawn-1]=pawnAttacks[0];
+    attackMaps[1][game::Pawn-1]=pawnAttacks[1];
     int mg=0,eg=0,phase=0;
     for(int sq=0;sq<64;++sq) {
         const int piece=pos.board[sq];
@@ -85,12 +125,49 @@ int Engine::evaluate(const game::Position& pos) const {
         int middle=0,end=0;
         const game::Bitboard ownPawns=white?whitePawns:blackPawns;
         const game::Bitboard enemyPawns=white?blackPawns:whitePawns;
+        // Rooks/queens need no attack-map generation if king-pressure
+        // scoring is disabled. Knight/bishop attacks remain needed for mobility.
+        const bool needAttacks=type==game::Knight || type==game::Bishop ||
+            (enabled(Heuristic::KingPressure) &&
+             (type==game::Rook || type==game::Queen));
+        const game::Bitboard pieceAttacks=type==game::Pawn?pawnAttacks[color]:
+            (needAttacks?pos.attacksFrom(sq):game::Bitboard{0});
+        if(enabled(Heuristic::KingPressure) &&
+           type>=game::Knight && type<=game::Queen)
+            attackMaps[color][type-1]|=pieceAttacks;
         switch(type) {
             case game::Pawn: {
                 middle=rank*8+center/2;
                 end=rank*12+center/3;
                 if(!(ownPawns&masks.neighbours[file])){middle-=13;end-=10;}
                 if(std::popcount(ownPawns&masks.files[file])>1){middle-=11;end-=15;}
+                // Supported pawn chains are more robust than lone pawns.
+                if(enabled(Heuristic::PawnSupport) && (pawnAttacks[color]&(1ULL<<sq))){
+                    middle+=8;end+=9;
+                }
+                const int front=sq+(white?8:-8);
+                if(enabled(Heuristic::WeakPawns) && front>=0&&front<64 && (pawnAttacks[1-color]&(1ULL<<front)) &&
+                   !(pawnAttacks[color]&(1ULL<<sq)) &&
+                   !(ownPawns&masks.neighbours[file])) {
+                    middle-=10;end-=7;
+                }
+                // A one-push pawn fork is an immediate tactical opportunity.
+                if(enabled(Heuristic::PawnForks) && front>=0&&front<64 && pos.board[front]==0) {
+                    const int targetRank=rank+2;
+                    if(targetRank<=7) {
+                        int valuables=0;
+                        for(int df : {-1,1}) {
+                            const int targetFile=file+df;
+                            if(targetFile<0||targetFile>7)continue;
+                            const int target=front+(white?8:-8)+df;
+                            if(target<0||target>=64)continue;
+                            const int enemy=kind(pos.board[target]);
+                            if(pos.board[target] && (pos.board[target]>0)!=white &&
+                               enemy>=game::Knight)++valuables;
+                        }
+                        if(valuables>=2){middle+=22;end+=14;}
+                    }
+                }
                 if(!(enemyPawns&masks.passed[color][sq])) {
                     middle+=rank*rank*2;
                     end+=rank*rank*4;
@@ -106,9 +183,31 @@ int Engine::evaluate(const game::Position& pos) const {
             }
             case game::Knight: {
                 phase+=1;
-                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                const int mobility=std::popcount(pieceAttacks&~pos.occupied[color]);
                 middle=center*5+3*(mobility-4);
                 end=center*3+2*(mobility-4);
+                // Static fork awareness: both colors are evaluated symmetrically,
+                // so an opponent's looming knight fork becomes a defensive penalty.
+                if(enabled(Heuristic::KnightForks)) {
+                    const auto enemyValuables=pos.bitboards[1-color][game::Rook-1] |
+                                              pos.bitboards[1-color][game::Queen-1] |
+                                              pos.bitboards[1-color][game::King-1];
+                    const auto otherTargets=pos.bitboards[1-color][game::Knight-1] |
+                                             pos.bitboards[1-color][game::Bishop-1];
+                    const auto victims=enemyValuables|otherTargets;
+                    if(std::popcount(pieceAttacks&victims)>=2 &&
+                       (pieceAttacks&enemyValuables)){middle+=23;end+=18;}
+                    int reachableForks=0;
+                    game::Bitboard destinations=pieceAttacks&~pos.occupied[color]&~pawnAttacks[1-color];
+                    while(destinations) {
+                        const int target=std::countr_zero(destinations);
+                        destinations&=destinations-1;
+                        const auto threats=knightTargets[target]&victims;
+                        if(std::popcount(threats)>=2 && (threats&enemyValuables))++reachableForks;
+                    }
+                    middle+=std::min(22,reachableForks*5);
+                    end+=std::min(12,reachableForks*3);
+                }
                 // Pawns defending a central knight outpost.
                 if(rank>=3 && rank<=5) {
                     const int supportRank=(sq>>3)+(white?-1:1);
@@ -124,7 +223,7 @@ int Engine::evaluate(const game::Position& pos) const {
             }
             case game::Bishop: {
                 phase+=1;
-                const int mobility=std::popcount(pos.attacksFrom(sq)&~pos.occupied[color]);
+                const int mobility=std::popcount(pieceAttacks&~pos.occupied[color]);
                 middle=center*3+2*(mobility-7);
                 end=center*3+3*(mobility-7);
                 break;
@@ -166,6 +265,28 @@ int Engine::evaluate(const game::Position& pos) const {
         eg+=side*(egValue[type]+end);
     }
     for(int color=0;color<2;++color) {
+        if(enabled(Heuristic::KingPressure)) {
+            // Count attacked squares immediately surrounding our king, weighting
+            // heavy-piece pressure and multiple attacking piece types. Unlike a
+            // pure pawn-shield term this detects open-file and piece-based attacks.
+            const int kingSq=std::countr_zero(pos.bitboards[color][game::King-1]);
+            const int kingFile=kingSq&7,kingRank=kingSq>>3;
+            game::Bitboard zone=0;
+            for(int df=-1;df<=1;++df)for(int dr=-1;dr<=1;++dr) {
+                const int f=kingFile+df,r=kingRank+dr;
+                if(f>=0&&f<8&&r>=0&&r<8)zone|=1ULL<<(r*8+f);
+            }
+            const auto& enemy=attackMaps[1-color];
+            const int pawnHits=std::popcount(zone&enemy[game::Pawn-1]);
+            const int knightHits=std::popcount(zone&enemy[game::Knight-1]);
+            const int bishopHits=std::popcount(zone&enemy[game::Bishop-1]);
+            const int rookHits=std::popcount(zone&enemy[game::Rook-1]);
+            const int queenHits=std::popcount(zone&enemy[game::Queen-1]);
+            const int attackers=(knightHits>0)+(bishopHits>0)+(rookHits>0)+(queenHits>0);
+            const int pressure=pawnHits+3*knightHits+2*bishopHits+3*rookHits+4*queenHits;
+            const int kingPenalty=std::min(125,pressure*(1+attackers)/2);
+            mg+=(color==0?-1:1)*kingPenalty;
+        }
         if(std::popcount(pos.bitboards[color][game::Bishop-1])>=2) {
             const int side=color==0?1:-1;
             mg+=side*28;eg+=side*35;
@@ -228,8 +349,15 @@ int Engine::moveScore(const game::Position& pos, game::Move m, game::Move hashMo
     if(victim) {
         int estimate=values[victim]*16-values[kind(pos.board[m.from])];
         // Losing exchanges are searched after quiet killer/history moves.
-        if(values[victim]<values[kind(pos.board[m.from])] && see(pos,m)<0)
-            return -15000+estimate;
+        if(values[victim]<values[kind(pos.board[m.from])]) {
+            // Most unfavorable-looking captures are undefended. Test attackers
+            // on the destination after vacating the source before invoking the
+            // much costlier legal recapture simulation.
+            const auto occupied=(pos.occupied[0]|pos.occupied[1]) & ~(1ULL<<m.from);
+            if((!enabled(Heuristic::SeePrefilter) ||
+                pos.attackersTo(m.to,!pos.whiteToMove,occupied)) && see(pos,m)<0)
+                return -15000+estimate;
+        }
         return 100000+estimate;
     }
     if(m==killers[ply][0])return 80000;
@@ -270,6 +398,13 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
         // Checking captures can be tactical even when their immediate material
         // value is small; never apply delta pruning to those moves.
         const bool givesCheck=pos.inCheck(pos.whiteToMove);
+        // Reuse the existing negative-SEE ordering score. Preserve checking
+        // captures, promotions and all legal evasions from check.
+        if(enabled(Heuristic::QSearchSeePruning) && !check && !givesCheck &&
+           scores[i]<0) {
+            pos.unmake(m,undo);
+            continue;
+        }
         if(!check && !givesCheck && !m.promotion &&
            stand+values[captured]+250<alpha) {
             pos.unmake(m,undo);
@@ -292,12 +427,12 @@ int Engine::quiescence(game::Position& pos,int alpha,int beta,int ply) {
 }
 int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,bool allowNull) {
     if(expired())return 0;
+    if(depth<=0)return quiescence(pos,alpha,beta,ply);
     ++nodes;
     bool inCheck=pos.inCheck(pos.whiteToMove);
     if(draw(pos) && !(inCheck && !pos.hasLegalMove()))return 0;
     if(ply>=MaxPly-1)return inCheck && !pos.hasLegalMove()?-Mate+ply:evaluate(pos);
     if(auto tb=tablebase.probeWdl(pos)) return *tb;
-    if(depth<=0)return quiescence(pos,alpha,beta,ply);
     if(inCheck)++depth; // check extension
     const int originalAlpha=alpha;
     const bool pvNode=beta-alpha>1;
@@ -305,17 +440,30 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     // frontier, and only after a legal move has already been fully searched.
     const bool futile=depth==1 && !pvNode && !inCheck &&
                       alpha<Mate-256 && evaluate(pos)+180<=alpha;
-    auto& entry=tt[pos.hash&(tt.size()-1)];
+    const bool clustered=enabled(Heuristic::ClusteredTT);
+    const auto bucket=clustered
+        ? (pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize
+        : (pos.hash&(tt.size()-1));
+    const auto bucketSize=clustered?TTClusterSize:std::size_t{1};
+    TTEntry* hit=nullptr;
+    TTEntry* victim=&tt[bucket];
+    auto replaceWeight=[&](const TTEntry& e) {
+        return e.key==0?-100000:(e.age==ttAge?e.depth:e.depth-8);
+    };
+    for(std::size_t j=0;j<bucketSize;++j) {
+        auto& candidate=tt[bucket+j];
+        if(candidate.key==pos.hash){hit=&candidate;break;}
+        if(replaceWeight(candidate)<replaceWeight(*victim))victim=&candidate;
+    }
     game::Move hashMove{};
-    // At high 50-move counts the position's halfmove clock matters but is not hashed.
     const bool ttSafe=pos.halfmove<80;
-    if(ttSafe && entry.key==pos.hash) {
-        hashMove=entry.move;
-        if(entry.depth>=depth && ply>0) {
-            int cached=entry.score;
+    if(ttSafe && hit) {
+        hashMove=hit->move;
+        if(hit->depth>=depth && ply>0) {
+            int cached=hit->score;
             if(cached>Mate-512)cached-=ply;
             else if(cached<-Mate+512)cached+=ply;
-            if(entry.bound==0||(entry.bound==1&&cached>=beta)||(entry.bound==2&&cached<=alpha))return cached;
+            if(hit->bound==0||(hit->bound==1&&cached>=beta)||(hit->bound==2&&cached<=alpha))return cached;
         }
     }
     // Null-move pruning: skip only with a non-pawn piece to avoid basic zugzwang.
@@ -326,11 +474,17 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
         pos.bitboards[pos.whiteToMove?0:1][game::Rook-1] ||
         pos.bitboards[pos.whiteToMove?0:1][game::Queen-1]) && evaluate(pos)>=beta) {
         auto undo=pos.makeNull();
+        history.push_back(0); // Separate real positions from null-move search.
         history.push_back(pos.hash);
         int value=-negamax(pos,depth-4,-beta,-beta+1,ply+1,false);
-        history.pop_back();pos.unmakeNull(undo);
+        history.pop_back();history.pop_back();pos.unmakeNull(undo);
         if(expired())return 0;
-        if(value>=beta)return beta;
+        if(value>=beta) {
+            if(!enabled(Heuristic::NullVerification) || depth<8)return beta;
+            const int verified=negamax(pos,depth-4,beta-1,beta,ply,false);
+            if(expired())return 0;
+            if(verified>=beta)return beta;
+        }
     }
     game::MoveList moves;pos.pseudoMoves(moves);
     std::array<int,game::MAX_MOVES> scores{};
@@ -364,6 +518,11 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
                 reduction=1;
                 if(depth>=7 && legal>=8)++reduction;
                 if(depth>=11 && legal>=14)++reduction;
+                if(enabled(Heuristic::HistoryLMR)) {
+                    const int historyScore=moveHistory[mover?0:1][m.from][m.to];
+                    if(historyScore>1000 && reduction>0)--reduction;
+                    if(historyScore< -2000 && depth>=6 && legal>=7)++reduction;
+                }
                 // Preserve the principal variation, and never reduce below 1 ply.
                 if(pvNode && reduction>1)--reduction;
                 reduction=std::min(reduction,depth-2);
@@ -397,25 +556,36 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
     if(!legal)return inCheck?-Mate+ply:0;
     if(ply==0)rootBestMove=bestMove;
     // Prefer replacing old entries and shallower entries; exact scores carry the most value.
-    if(ttSafe && (entry.key==pos.hash || entry.age!=ttAge ||
-                  depth>=entry.depth || (best>originalAlpha && best<beta))) {
-        entry.key=pos.hash;entry.move=bestMove;entry.depth=static_cast<std::int16_t>(depth);
-        int stored=best;
-        if(stored>Mate-512)stored+=ply;
-        else if(stored<-Mate+512)stored-=ply;
-        entry.score=static_cast<std::int16_t>(stored);
-        entry.bound=best<=originalAlpha?2:(best>=beta?1:0);
-        entry.age=ttAge;
+    if(ttSafe) {
+        auto& entry=hit?*hit:*victim;
+        if((clustered && (!hit || depth>=entry.depth ||
+                     (best>originalAlpha && best<beta))) ||
+           (!clustered && (entry.key==pos.hash || entry.age!=ttAge ||
+                          depth>=entry.depth || (best>originalAlpha && best<beta)))) {
+            entry.key=pos.hash;entry.move=bestMove;entry.depth=static_cast<std::int16_t>(depth);
+            int stored=best;
+            if(stored>Mate-512)stored+=ply;
+            else if(stored<-Mate+512)stored-=ply;
+            entry.score=static_cast<std::int16_t>(stored);
+            entry.bound=best<=originalAlpha?2:(best>=beta?1:0);
+            entry.age=ttAge;
+        }
     }
     return best;
 }
 std::vector<game::Move> Engine::principalVariation(game::Position pos,int length) {
     std::vector<game::Move> pv;
     for(int i=0;i<length;++i) {
-        const auto& e=tt[pos.hash&(tt.size()-1)];
-        if(e.key!=pos.hash||!static_cast<bool>(e.move))break;
+        const bool clustered=enabled(Heuristic::ClusteredTT);
+        const auto bucket=clustered
+            ? (pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize
+            : (pos.hash&(tt.size()-1));
+        const TTEntry* entry=nullptr;
+        for(std::size_t j=0;j<(clustered?TTClusterSize:std::size_t{1});++j)
+            if(tt[bucket+j].key==pos.hash){entry=&tt[bucket+j];break;}
+        if(!entry||!static_cast<bool>(entry->move))break;
         game::MoveList moves;pos.legalMoves(moves);
-        auto m=e.move;
+        auto m=entry->move;
         bool found=false;
         for(int j=0;j<moves.size;++j)if(moves[j]==m){found=true;break;}
         if(!found)break;
@@ -454,11 +624,18 @@ Result Engine::search(game::Position pos,Limits requested,
             alpha=std::max(-Mate-100,result.info.score-35);
             beta=std::min(Mate+100,result.info.score+35);
         }
-        int score=negamax(pos,depth,alpha,beta,0);
-        if(expired())break;
-        if(score<=alpha || score>=beta) {
-            // Full-window retry: do not publish an unconfirmed aspiration result.
-            score=negamax(pos,depth,-Mate-100,Mate+100,0);
+        int score=0,delta=35;
+        for(;;) {
+            score=negamax(pos,depth,alpha,beta,0);
+            if(expired())break;
+            if(score>alpha && score<beta)break;
+            if(!enabled(Heuristic::AdaptiveAspiration)) {
+                score=negamax(pos,depth,-Mate-100,Mate+100,0);
+                break;
+            }
+            delta=std::min(delta*2,Mate+100);
+            if(score<=alpha)alpha=std::max(-Mate-100,score-delta);
+            else beta=std::min(Mate+100,score+delta);
         }
         if(expired())break; // Preserve previous fully completed depth.
         auto pv=principalVariation(pos,depth);

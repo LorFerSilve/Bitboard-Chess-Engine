@@ -137,5 +137,85 @@ int main() {
         CHECK(game::Position::fromFen(randomPosition.fen()).hash==randomPosition.hash);
     }
     CHECK(randomPosition.fen()==originalFen && randomPosition.hash==originalHash);
+    // Threefold repetition must be recognized using real game history.
+    // In particular this remains correct after null-move pruning attempts.
+    auto repeated=game::Position::start();
+    std::vector<std::uint64_t> previous{repeated.hash};
+    for(const auto* uci:{"g1f3","g8f6","f3g1","f6g8",
+                         "g1f3","g8f6","f3g1","f6g8"}) {
+        CHECK(repeated.playUci(uci));
+        previous.push_back(repeated.hash);
+    }
+    CHECK(repeated.hash==game::Position::start().hash);
+    engine::Limits repetitionLimits;repetitionLimits.depth=5;
+    e.prepareSearch();
+    auto repeatedSearch=e.search(repeated,repetitionLimits,previous);
+    CHECK(repeatedSearch.info.depth==5);
+    CHECK(repeatedSearch.info.score==0);
+    CHECK(static_cast<bool>(repeatedSearch.best));
+    // Exercise clustered TT lookups and replacement across search positions.
+    e.clearHash();
+    for(const auto* fen:{
+        "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+        "rnbqkbnr/pp1ppppp/8/2p5/2P5/8/PP1PPPPP/RNBQKBNR w KQkq c6 0 2",
+        "4k3/8/8/8/8/8/8/4K2Q w - - 0 1"
+    }) {
+        auto position=game::Position::fromFen(fen);
+        game::MoveList legalChoices;position.legalMoves(legalChoices);
+        e.prepareSearch();
+        engine::Limits stressLimits;stressLimits.depth=4;
+        const auto searched=e.search(position,stressLimits);
+        CHECK(searched.info.depth==4);
+        bool matches=false;
+        for(int i=0;i<legalChoices.size;++i)
+            if(legalChoices[i]==searched.best)matches=true;
+        CHECK(matches);
+    }
+    // Switches must be independently writable and readable; no heuristic may
+    // implicitly alter another. Search must still work with everything off.
+    engine::Engine ablation(2);
+    for(auto name:engine::HeuristicNames) {
+        CHECK(ablation.heuristicEnabled(name));
+        CHECK(ablation.setHeuristic(name,false));
+        CHECK(!ablation.heuristicEnabled(name));
+        CHECK(ablation.setHeuristic(name,true));
+        CHECK(ablation.heuristicEnabled(name));
+    }
+    CHECK(!ablation.setHeuristic("unknown heuristic",false));
+    ablation.setAllHeuristics(false);
+    for(auto name:engine::HeuristicNames)CHECK(!ablation.heuristicEnabled(name));
+    engine::Limits ablationLimits;ablationLimits.depth=3;
+    ablation.prepareSearch();
+    auto disabledSearch=ablation.search(game::Position::start(),ablationLimits);
+    CHECK(disabledSearch.info.depth==3 && static_cast<bool>(disabledSearch.best));
+    CHECK(ablation.setHeuristic("King Pressure",true));
+    CHECK(ablation.heuristicEnabled("King Pressure"));
+    for(auto name:engine::HeuristicNames)
+        if(name!="King Pressure")CHECK(!ablation.heuristicEnabled(name));
+    ablation.prepareSearch();
+    auto singleSearch=ablation.search(game::Position::start(),ablationLimits);
+    CHECK(singleSearch.info.depth==3 && static_cast<bool>(singleSearch.best));
+    // Check evasions and forcing checks must remain searchable with this
+    // selective quiescence switch enabled.
+    ablation.setAllHeuristics(false);
+    CHECK(ablation.setHeuristic("QSearch SEE Pruning",true));
+    for(const auto* fen : {
+        "7k/8/5KQ1/8/8/8/8/8 w - - 99 1",
+        "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+        "8/4k3/8/3pP3/8/8/8/4K3 w - d6 0 1"
+    }) {
+        auto position=game::Position::fromFen(fen);
+        game::MoveList legalMoves;position.legalMoves(legalMoves);
+        ablation.prepareSearch();
+        engine::Limits tacticalLimits;tacticalLimits.depth=4;
+        auto test=ablation.search(position,tacticalLimits);
+        CHECK(test.info.depth>=1 && test.info.depth<=4); // Exact-mate scores stop iterative deepening early.
+        bool found=false;
+        for(int i=0;i<legalMoves.size;++i)
+            if(test.best==legalMoves[i])found=true;
+        CHECK(found);
+    }
+    ablation.setAllHeuristics(true);
+    for(auto name:engine::HeuristicNames)CHECK(ablation.heuristicEnabled(name));
     std::cout<<"All game/search tests passed\n";
 }
