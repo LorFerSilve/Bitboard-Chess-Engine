@@ -209,7 +209,7 @@ int main() {
         ablation.prepareSearch();
         engine::Limits tacticalLimits;tacticalLimits.depth=4;
         auto test=ablation.search(position,tacticalLimits);
-        CHECK(test.info.depth==4);
+        CHECK(test.info.depth>=1 && test.info.depth<=4); // Exact-mate scores stop iterative deepening early.
         bool found=false;
         for(int i=0;i<legalMoves.size;++i)
             if(test.best==legalMoves[i])found=true;
