@@ -57,6 +57,10 @@ All eleven v0.6 experimental heuristics are **off by default**, but independentl
 - A 95-position extended opening suite is checked into `benchmarks/openings/extended.epd`; an additional CTest target verifies completed depth-3 searches always return legal moves on these positions.
 - The strength runner now defaults to the extended opening suite; the original 16-position `smoke.epd` remains available for quick checks.
 
+## Independent long-control opening benchmark
+
+The [Lichess ECO independent benchmark protocol](benchmarks/EXTERNAL_ECO.md) uses a fixed, SHA-256-audited 750-position external CC0 corpus, five predeclared 300-game comparisons, 10+0.1 time control, and unchanged historical v0.5. This is a separate validation stage from earlier 95-opening screening; any Elo estimates remain provisional until confirmation.
+
 ## Strength testing (Elo / SPRT)
 
 Install [Fastchess](https://github.com/Disservin/fastchess) separately. The Python orchestrator uses only the standard library; do not confuse `--concurrency` (simultaneous games) with multithreaded **engine** searching.
