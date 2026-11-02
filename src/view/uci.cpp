@@ -41,9 +41,11 @@ int main() {
                 print("option name Hash type spin default 32 min 1 max 1024");
                 print("option name Move Overhead type spin default 20 min 0 max 1000");
                 print("option name SyzygyPath type string default <empty>");
-                print("option name All Heuristics type check default true");
+                // Group toggle advertises false unless every individual switch is on.
+                print("option name All Heuristics type check default false");
                 for(auto name:engine::HeuristicNames)
-                    print("option name "+std::string(name)+" type check default true");
+                    print("option name "+std::string(name)+" type check default "+
+                          std::string(engine.heuristicEnabled(name)?"true":"false"));
                 print("uciok");
             } else if(command=="isready")print("readyok");
             else if(command=="ucinewgame") {

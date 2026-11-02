@@ -16,6 +16,8 @@ int kingDistanceToCenter(int square) {
 }
 Engine::Engine(std::size_t hashMb) {
     heuristics_.fill(true);
+    // The newly screened qsearch SEE pruning has no confirmed Elo gain.
+    heuristics_[static_cast<std::size_t>(Heuristic::QSearchSeePruning)]=false;
     resizeHash(hashMb);
 }
 bool Engine::setHeuristic(std::string_view name,bool value) {
