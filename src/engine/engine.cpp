@@ -9,6 +9,18 @@ namespace chess::engine {
 namespace {
 constexpr int values[]={0,100,325,335,500,950,0};
 int kind(std::int8_t p){return std::abs(static_cast<int>(p));}
+// Use the same reversible-move window for search and reported PVs. The
+// history includes the current position and may contain a null-move barrier.
+bool threefoldRepetition(const game::Position& pos,
+                         const std::vector<std::uint64_t>& lineHistory) {
+    int seen=0;
+    const int start=std::max<int>(0,static_cast<int>(lineHistory.size())-1-pos.halfmove);
+    for(int i=static_cast<int>(lineHistory.size())-2;i>=start;--i) {
+        if(lineHistory[i]==0)break; // Artificial null moves cannot be repeated.
+        if(lineHistory[i]==pos.hash && ++seen>=2)return true;
+    }
+    return false;
+}
 int kingDistanceToCenter(int square) {
     int f=square&7,r=square>>3;
     return std::abs(2*f-7)+std::abs(2*r-7);
@@ -56,15 +68,8 @@ bool Engine::expired() {
     return false;
 }
 bool Engine::draw(const game::Position& pos) const {
-    if(pos.halfmove>=100||pos.insufficientMaterial())return true;
-    int seen=0;
-    // Only reversible moves can create a repetition of the current position.
-    int start=std::max<int>(0,static_cast<int>(history.size())-1-pos.halfmove);
-    for(int i=static_cast<int>(history.size())-2;i>=start;--i) {
-        if(history[i]==0)break; // Do not cross an artificial null move.
-        if(history[i]==pos.hash && ++seen>=2)return true;
-    }
-    return false;
+    return pos.halfmove>=100 || pos.insufficientMaterial() ||
+           threefoldRepetition(pos,history);
 }
 int Engine::evaluate(const game::Position& pos) const {
     // Tapered classical evaluation. Features and weights are deliberately
@@ -577,7 +582,14 @@ int Engine::negamax(game::Position& pos,int depth,int alpha,int beta,int ply,boo
 }
 std::vector<game::Move> Engine::principalVariation(game::Position pos,int length) {
     std::vector<game::Move> pv;
+    // TT moves are legal in isolation but may continue past a claimable
+    // threefold repetition. Reconstruct against actual game + PV history.
+    auto lineHistory=history;
+    if(lineHistory.empty() || lineHistory.back()!=pos.hash)
+        lineHistory.push_back(pos.hash);
     for(int i=0;i<length;++i) {
+        if(pos.halfmove>=100 || pos.insufficientMaterial() ||
+           threefoldRepetition(pos,lineHistory))break;
         const bool clustered=enabled(Heuristic::ClusteredTT);
         const auto bucket=clustered
             ? (pos.hash&(tt.size()/TTClusterSize-1))*TTClusterSize
@@ -593,6 +605,7 @@ std::vector<game::Move> Engine::principalVariation(game::Position pos,int length
         if(!found)break;
         pv.push_back(m);
         pos.make(m);
+        lineHistory.push_back(pos.hash);
     }
     return pv;
 }

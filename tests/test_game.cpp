@@ -3,6 +3,7 @@
 #include <stdexcept>
 #define CHECK(cond) do { if (!(cond)) throw std::runtime_error("Test failed: " #cond); } while(false)
 #include <iostream>
+#include <sstream>
 #include <vector>
 
 int main() {
@@ -153,6 +154,57 @@ int main() {
     CHECK(repeatedSearch.info.depth==5);
     CHECK(repeatedSearch.info.score==0);
     CHECK(static_cast<bool>(repeatedSearch.best));
+    // Fastchess 600-game confirmation reported PVs that continued beyond a
+    // third occurrence of a position (both v0.5 and experimental v0.6).
+    // Replay one real game from that log; validate *every* reported iteration,
+    // not just the final bestmove. Reported moves must stay legal and stop
+    // as soon as a threefold/50-move/insufficient-material draw is reached.
+    auto pvPosition=game::Position::fromFen(
+        "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N4P/PPP2PP1/R1BQKB1R b KQkq - 0 1");
+    std::vector<std::uint64_t> pvHistory{pvPosition.hash};
+    std::istringstream played(
+        "e7e5 d4f3 b7b5 a2a4 b5b4 c3d5 f6e4 f1d3 e4c5 d5b4 e5e4 "
+        "d3c4 e4f3 c4f7 e8f7 d1f3 f7e8 f3a8 c8b7 a8a7 b7g2 h1h2 "
+        "b8c6 b4c6 g2c6 b2b4 c5a4 a7a6 d8d7 a6e2 d7e7 c2c4 e7e2 "
+        "e1e2 d6d5 b4b5 a4c3 e2d3 c3b5 c4b5 c6b5 d3d4 b5c4 c1f4 "
+        "h8g8 f4e5 f8e7 f2f4 g7g6 a1a7 h7h5 h2b2 e8f7 b2b7 g8e8 "
+        "e5d6 f7e6 d6e7");
+    for(std::string uci;played>>uci;) {
+        CHECK(pvPosition.playUci(uci));
+        pvHistory.push_back(pvPosition.hash);
+    }
+    engine::Engine pvEngine(2);
+    engine::Limits pvLimits;pvLimits.depth=10;
+    int observedPvs=0;
+    auto validatePv=[&](const engine::SearchInfo& info) {
+        if(info.pv.empty())return;
+        ++observedPvs;
+        auto continuation=pvPosition;
+        auto hashes=pvHistory;
+        for(const auto move:info.pv) {
+            CHECK(continuation.halfmove<100);
+            CHECK(!continuation.insufficientMaterial());
+            const int start=std::max<int>(
+                0,static_cast<int>(hashes.size())-1-continuation.halfmove);
+            int repetitions=0;
+            for(int i=static_cast<int>(hashes.size())-2;i>=start;--i) {
+                if(hashes[i]==0)break;
+                if(hashes[i]==continuation.hash)++repetitions;
+            }
+            CHECK(repetitions<2);
+            game::MoveList choices;continuation.legalMoves(choices);
+            bool legalPvMove=false;
+            for(int i=0;i<choices.size;++i)
+                if(choices[i]==move)legalPvMove=true;
+            CHECK(legalPvMove);
+            continuation.make(move);
+            hashes.push_back(continuation.hash);
+        }
+    };
+    pvEngine.prepareSearch();
+    const auto pvResult=pvEngine.search(pvPosition,pvLimits,pvHistory,validatePv);
+    CHECK(pvResult.info.depth==10 && observedPvs>0);
+    validatePv(pvResult.info);
     // Exercise clustered TT lookups and replacement across search positions.
     e.clearHash();
     for(const auto* fen:{
