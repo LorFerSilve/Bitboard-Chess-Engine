@@ -1,0 +1,57 @@
+name: v0.6 heuristic screening matrix
+
+on:
+  push:
+    paths:
+      - .github/workflows/v06-heuristic-screen.yml
+  workflow_dispatch:
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        heuristic:
+          - { key: clustered-tt, name: 'Clustered TT' }
+          - { key: null-verification, name: 'Null Verification' }
+          - { key: history-lmr, name: 'History LMR' }
+          - { key: adaptive-aspiration, name: 'Adaptive Aspiration' }
+          - { key: see-prefilter, name: 'SEE Prefilter' }
+          - { key: king-pressure, name: 'King Pressure' }
+          - { key: pawn-support, name: 'Pawn Support' }
+          - { key: weak-pawns, name: 'Weak Pawns' }
+          - { key: pawn-forks, name: 'Pawn Forks' }
+          - { key: knight-forks, name: 'Knight Forks' }
+    env:
+      HEURISTIC: ${{ matrix.heuristic.name }}
+      KEY: ${{ matrix.heuristic.key }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test candidate
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Compile Fastchess
+        run: |
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Isolate the heuristic (80 paired games)
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --fastchess /tmp/fastchess/fastchess \
+            --ablation "$HEURISTIC" --ablation-mode isolated \
+            --mode fixed --rounds 40 --tc 3+0.03 \
+            --hash 16 --concurrency 2 --seed 20261031 \
+            --out "results/$KEY"
+      - name: Save game and provenance logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screening-${{ matrix.heuristic.key }}
+          path: results/
+          if-no-files-found: warn

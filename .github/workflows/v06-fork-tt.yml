@@ -1,0 +1,62 @@
+name: v0.6 fork and TT selection versus v0.5
+
+on:
+  push:
+    paths:
+      - .github/workflows/v06-fork-tt.yml
+
+jobs:
+  compare:
+    name: "v0.6 ${{ matrix.variant }} versus v0.5"
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - variant: all-off-control
+            forks: "false"
+            tt: "false"
+          - variant: knight-forks
+            forks: "true"
+            tt: "false"
+          - variant: clustered-tt
+            forks: "false"
+            tt: "true"
+          - variant: knight-forks-tt
+            forks: "true"
+            tt: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build candidate and Fastchess
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Evaluate without king-pressure heuristic
+        env:
+          VARIANT: ${{ matrix.variant }}
+          FORKS: ${{ matrix.forks }}
+          TT: ${{ matrix.tt }}
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --baseline-ref 9189218c76bee69c08a7e29dad12650ada2d1b13 \
+            --candidate-option "All Heuristics=false" \
+            --candidate-option "Knight Forks=$FORKS" \
+            --candidate-option "Clustered TT=$TT" \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 100 --tc 3+0.03 --concurrency 2 \
+            --hash 16 --seed 20261103 \
+            --out "results/$VARIANT"
+      - name: Preserve PGN and metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selection-${{ matrix.variant }}
+          path: results/
+          if-no-files-found: warn

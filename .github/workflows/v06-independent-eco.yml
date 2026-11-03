@@ -1,0 +1,134 @@
+name: v0.6 independent Lichess ECO benchmark (10+0.1)
+
+on:
+  push:
+    paths:
+      - .github/workflows/v06-independent-eco.yml
+  workflow_dispatch:
+
+jobs:
+  book:
+    name: Produce and audit external CC0 ECO book
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: lichess-org/chess-openings
+          ref: 712a58be746c143f4ab935b68acc50f4bac813eb
+          path: source-lichess-openings
+          persist-credentials: false
+      - name: Install benchmark-only PGN parser
+        run: python -m pip install chess==1.11.2
+      - name: Build fixed 750-position independent opening pool
+        run: |
+          python tools/make_external_book.py \
+            --source-dir source-lichess-openings \
+            --exclude benchmarks/openings/extended.epd \
+            --output benchmark/external/holdout.epd \
+            --manifest benchmark/external/book.json \
+            --per-volume 150 --seed 20261108
+      - name: Verify generated book and manifest before running matches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib, json
+          import chess
+          p = Path("benchmark/external/holdout.epd")
+          manifest = json.loads(Path("benchmark/external/book.json").read_text())
+          lines = p.read_text().splitlines()
+          assert len(lines) == 750 and len(set(lines)) == 750
+          assert manifest["per_eco_volume"] == {v: 150 for v in "ABCDE"}
+          assert manifest["old_book_overlap"] == 0
+          assert manifest["book_sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+          for epd in lines:
+              board = chess.Board(epd + " 0 1")
+              assert board.is_valid() and not board.is_game_over(claim_draw=True)
+          print("Valid 750-position external book with manifest SHA-256")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: independent-eco-750-positions
+          path: benchmark/external/
+          if-no-files-found: error
+
+  match:
+    name: "10+0.1 / 300 games: ${{ matrix.variant }}"
+    needs: book
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        variant: [control-v05, qsearch-v05, tt-aspiration-v05, null-v05, qsearch-isolated]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: independent-eco-750-positions
+          path: benchmark/external/
+      - name: Verify byte-for-byte identical book for every matrix job
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          p = Path("benchmark/external/holdout.epd")
+          m = json.loads(Path("benchmark/external/book.json").read_text())
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == m["book_sha256"]
+          assert m["total_positions"] == 750 and m["old_book_overlap"] == 0
+          print("Openings SHA-256:", m["book_sha256"])
+          PY
+      - name: Compile portable candidate and run existing regression suite
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Exercise full external book with C++ search legality suite
+        run: ./build/chess_search_suite benchmark/external/holdout.epd
+      - name: Build pinned Fastchess
+        run: |
+          git init -q /tmp/fastchess
+          git -C /tmp/fastchess remote add origin https://github.com/Disservin/fastchess.git
+          git -C /tmp/fastchess fetch --depth 1 origin ebfd64cb7fac80d4822c50b07dca4fe934779d21
+          git -C /tmp/fastchess checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/fastchess rev-parse HEAD)" = "ebfd64cb7fac80d4822c50b07dca4fe934779d21"
+          make -C /tmp/fastchess -j2
+      - name: Compare same predeclared configurations on shared openings
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          candidate_options=(--candidate-option "All Heuristics=false")
+          baseline_options=(--baseline-ref 9189218c76bee69c08a7e29dad12650ada2d1b13)
+          case "$VARIANT" in
+            control-v05) ;;
+            qsearch-v05) candidate_options+=(--candidate-option "QSearch SEE Pruning=true") ;;
+            tt-aspiration-v05)
+              candidate_options+=(--candidate-option "Clustered TT=true"
+                                  --candidate-option "Adaptive Aspiration=true") ;;
+            null-v05) candidate_options+=(--candidate-option "Null Verification=true") ;;
+            qsearch-isolated)
+              candidate_options+=(--candidate-option "QSearch SEE Pruning=true")
+              baseline_options=(--baseline build/bitboard-chess-engine
+                                --baseline-option "All Heuristics=false") ;;
+            *) exit 2 ;;
+          esac
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            "${baseline_options[@]}" "${candidate_options[@]}" \
+            --book benchmark/external/holdout.epd \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 150 --tc 10+0.1 --concurrency 2 \
+            --hash 32 --seed 20261109 --out "results/$VARIANT"
+      - name: Preserve games, log, metadata and independent-book provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eco-long-${{ matrix.variant }}
+          path: |
+            results/
+            benchmark/external/book.json
+          if-no-files-found: warn

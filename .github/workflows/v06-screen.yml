@@ -1,0 +1,97 @@
+name: v0.6 heuristic screening matrix
+
+on:
+  push:
+    paths:
+      - .github/workflows/v06-screen.yml
+
+jobs:
+  screen:
+    name: "Isolated: ${{ matrix.heuristic }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        include:
+          - heuristic: "Clustered TT"
+            slug: clustered-tt
+          - heuristic: "Null Verification"
+            slug: null-verification
+          - heuristic: "History LMR"
+            slug: history-lmr
+          - heuristic: "Adaptive Aspiration"
+            slug: adaptive-aspiration
+          - heuristic: "SEE Prefilter"
+            slug: see-prefilter
+          - heuristic: "King Pressure"
+            slug: king-pressure
+          - heuristic: "Pawn Support"
+            slug: pawn-support
+          - heuristic: "Weak Pawns"
+            slug: weak-pawns
+          - heuristic: "Pawn Forks"
+            slug: pawn-forks
+          - heuristic: "Knight Forks"
+            slug: knight-forks
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile identical engine for both sides
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+      - name: Build Fastchess
+        run: |
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Isolate one heuristic against all-off control (60 paired openings)
+        env:
+          HEURISTIC: ${{ matrix.heuristic }}
+          SLUG: ${{ matrix.slug }}
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --ablation "$HEURISTIC" --ablation-mode isolated \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 60 --tc 3+0.03 --concurrency 2 \
+            --seed 20261101 --hash 16 \
+            --out "results/$SLUG"
+      - name: Archive immutable paired match logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-${{ matrix.slug }}
+          path: results/
+          if-no-files-found: warn
+  reference:
+    name: All-off v0.6 control versus historical v0.5
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build candidate and fastchess
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCHESS_NATIVE=OFF -DCHESS_LTO=ON
+          cmake --build build --parallel 2
+          git clone --depth 1 https://github.com/Disservin/fastchess.git /tmp/fastchess
+          make -C /tmp/fastchess -j2
+      - name: Baseline parity match, all new toggles disabled
+        run: |
+          python tools/strength_test.py \
+            --candidate build/bitboard-chess-engine \
+            --candidate-option "All Heuristics=false" \
+            --baseline-ref 9189218c76bee69c08a7e29dad12650ada2d1b13 \
+            --fastchess /tmp/fastchess/fastchess \
+            --mode fixed --rounds 60 --tc 3+0.03 --concurrency 2 \
+            --seed 20261101 --hash 16 \
+            --out results/control-v05
+      - name: Archive baseline match
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-control-v05
+          path: results/
+          if-no-files-found: warn

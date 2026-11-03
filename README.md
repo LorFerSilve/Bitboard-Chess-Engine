@@ -1,8 +1,8 @@
 # Bitboard Chess Engine
 
-A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.5** improves search efficiency, quiet-move ordering, conservative frontier pruning, and clock safety. NNUE and Lazy SMP are deliberately deferred.
+A C++20 **single-threaded** chess engine with a reusable `Game` / `Engine` / `View` architecture and a UCI command-line adapter. **v0.6 development candidate** builds on v0.5 with a clustered transposition table, safer null-move verification, adaptive aspiration windows, and tactical/positional evaluation improvements. NNUE and Lazy SMP remain deferred.
 
-This is an **experimental engine**. The improvements below are implementation and correctness changes; **no Elo improvement has yet been established**. The intended process is to run statistically meaningful paired matches using the supplied strength-testing runner before calling any search change a strength improvement.
+This is an **experimental engine**. In a 200-game paired match, **v0.5 beat v0.4 by +92.46 Elo ±34.97** at 3+0.03 (see [benchmark report](benchmarks/results/v0.5-v0.4.md)). The first fully enabled v0.6 prototype **regressed by -45.42 Elo ±39.24** against v0.5. Subsequent [individual screening](benchmarks/results/v0.6-isolated-screen.md) and [combination tests](benchmarks/results/v0.6-combinations.md) have not yet established a positive release gain. The [five-way targeted selection](benchmarks/results/v0.6-targeted-selection.md) shortlisted TT + aspiration (+27.85 ±38.85 Elo over 200 games), but the [400-game confirmation](benchmarks/results/v0.6-tt-aspiration-confirmation.md) finished at **−2.61 ±25.58 Elo**. No v0.6 configuration is a validated strength improvement. The [QSearch SEE Pruning 200-game comparisons](benchmarks/results/v0.6-qsearch-see.md) gave +24.36 ±37.00 Elo against the v0.6 all-off control and −1.74 ±38.83 against historical v0.5; neither demonstrates a reliable gain. This experimental option is **disabled by default**, but remains switchable for additional testing. **v0.5 remains the strongest validated release**.
 
 ## Build and test
 
@@ -29,6 +29,19 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 - **Engine** (`include/chess/engine.hpp`, `src/engine/`): single-core iterative deepening, PVS/alpha-beta, aspiration windows, quiescence, null-move pruning, LMR, legal-recature-aware static exchange evaluation for ordering, TT, history/killer ordering, tapered classical evaluation, and optional Syzygy probing.
 - **View** (`src/view/uci.cpp`): asynchronous UCI adapter; a future GUI can use Game and Engine directly.
 
+### v0.6 candidate changes
+
+- Four-entry clustered transposition table to limit destructive collisions, preserving exact-depth and age-aware replacement.
+- Incremental aspiration-window widening instead of immediate full-window retries; history-aware late-move reductions.
+- Null-move verification at higher depths and repetition-history separation across artificial null moves.
+- Fixed duplicate node counting when negamax transitions into quiescence.
+- Cheap recapture-availability screening before expensive legal SEE for unfavorable-looking captures.
+- Tapered evaluation now scores king-zone attacking pressure, pawn-chain support, selected weak pawns, and simple current/one-ply pawn and knight fork threats for both sides. These are *heuristic threats*, not full tactical proof of a forced fork.
+- Threefold-repetition regression test and search tests exercising clustered TT use.
+- Experimental `QSearch SEE Pruning`: avoid searching previously identified SEE-negative captures at quiescence nodes unless the capture gives check; never prune check evasions or promotions. Like all experimental v0.6 heuristics, it is disabled by default and can be enabled via UCI for further controlled evaluation; it is not an established strength gain.
+
+All eleven v0.6 experimental heuristics are **off by default**, but independently controllable via UCI (see [HEURISTICS.md](benchmarks/HEURISTICS.md)). The all-off v0.6 development engine retains always-on search-correctness changes and is not a byte-identical copy of historical v0.5. The first combined prototype lost against v0.5, and the screened combinations have not established superiority. Do not merge all-on defaults into a release without new evidence. Historical v0.5 baseline: `9189218c76bee69c08a7e29dad12650ada2d1b13`.
+
 ### v0.5 changes
 
 - Quiescence generates and sorts only captures/promotions unless in check, and delays expensive stalemate verification until needed. Stand-pat beta cutoffs still verify that at least one legal move exists.
@@ -43,6 +56,10 @@ Supported UCI commands: `uci`, `isready`, `ucinewgame`, `position startpos moves
 - Late Move Reductions adapt to depth and move index; power-of-two transposition table sizes allow masking instead of division for hash lookup.
 - A 95-position extended opening suite is checked into `benchmarks/openings/extended.epd`; an additional CTest target verifies completed depth-3 searches always return legal moves on these positions.
 - The strength runner now defaults to the extended opening suite; the original 16-position `smoke.epd` remains available for quick checks.
+
+## Independent long-control opening benchmark
+
+The [Lichess ECO independent benchmark](benchmarks/EXTERNAL_ECO.md) **completed all 1,500 games** over five predeclared 300-game comparisons at 10+0.1 on a new 750-position CC0 corpus. [Full results](benchmarks/results/v0.6-external-eco.md): all-off +4.63 ±28.04 Elo, QSearch SEE +24.36 ±26.86, TT + Aspiration −19.71 ±25.92, Null Verification −18.55 ±27.40 (all versus unchanged v0.5); isolated QSearch +16.23 ±28.17 versus all-off v0.6. **Every interval includes zero; no upgrade is validated.** A [new 600-game QSearch confirmation](.github/workflows/v06-qsearch-confirm.yml) is preregistered using an ECO pool excluding every position from both preceding opening books. v0.5 and the all-off v0.6 defaults remain unchanged.
 
 ## Strength testing (Elo / SPRT)
 
@@ -92,7 +109,7 @@ ctest --test-dir build-native -C Release --output-on-failure
 
 - No NNUE, multithreaded search, or graphical interface. Those are independent future phases.
 - Fathom requires real tablebases to prove exact endgame behavior and remains an optional build.
-- Large-scale engine-vs-engine Elo/SPRT tests have not been run on this release. Search and evaluation weights have not been tuned through statistical tests.
+- The v0.5 vs v0.4 200-game comparison is recorded in the repository, but cross-time-control validation and systematic per-heuristic tuning are still needed. No v0.6 configuration has yet shown a statistically convincing Elo advantage against v0.5.
 - Move generation still relies on pseudo-legal moves filtered by make/unmake; specialized check/pin/evasion generation could reduce work. Quiescence still checks stalemate by testing legal moves.
 - SEE uses legal least-valued recaptures, which is more accurate on pins but can be more expensive; extensive tactical performance regression and tuning remain important.
 - Time management is currently basic. Draw claims are simplified for search rather than modeled as player choices at GUI level.
